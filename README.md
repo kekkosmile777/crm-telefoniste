@@ -45,8 +45,9 @@ TWILIO_ACCOUNT_SID=ACxxxxxxxx
 TWILIO_API_KEY=SKxxxxxxxx
 TWILIO_API_SECRET=xxxxxxxx
 TWILIO_TWIML_APP_SID=APxxxxxxxx
-TWILIO_CALLER_ID=+39xxxxxxxxxx
 ```
+
+5. Il **numero in uscita (caller ID)** si seleziona dalla dashboard admin → Impostazioni → Telefonia (elenco automatico dei numeri dell'account). `TWILIO_CALLER_ID` è opzionale come fallback.
 
 Nota: per chiamare numeri italiani da trial Twilio i numeri destinatari vanno verificati; con account a pagamento serve l'abilitazione geo-permissions per l'Italia.
 

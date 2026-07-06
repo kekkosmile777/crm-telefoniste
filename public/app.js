@@ -810,11 +810,17 @@ async function viewImpostazioni() {
     <h2 class="page-title">Impostazioni <em>Sistema</em></h2>
     <div class="card">
       <b>☎️ Telefonia (Twilio)</b>
-      <p style="margin-top:8px">${tw.configured
-        ? `<span class="tag green">configurato</span> Numero in uscita: <b>${esc(tw.caller_id)}</b>`
-        : `<span class="tag red">non configurato</span> Il CRM funziona in <b>modalità manuale</b>: le operatrici chiamano dal proprio telefono e registrano gli esiti.`}</p>
-      <p class="muted" style="margin-top:8px">Per attivare il softphone nel browser, imposta le variabili d'ambiente:
-      <code>TWILIO_ACCOUNT_SID, TWILIO_API_KEY, TWILIO_API_SECRET, TWILIO_TWIML_APP_SID, TWILIO_CALLER_ID</code> e riavvia il server. La TwiML App deve puntare a <code>POST /api/twilio/voice</code>.</p>
+      <p style="margin-top:8px">${tw.twilio_ok
+        ? (tw.configured
+          ? `<span class="tag green">softphone attivo</span> Numero in uscita: <b>${esc(tw.caller_id)}</b>`
+          : `<span class="tag orange">quasi pronto</span> Twilio è collegato: <b>seleziona il numero in uscita</b> qui sotto per attivare il softphone.`)
+        : `<span class="tag red">non configurato</span> Il CRM funziona in <b>modalità manuale</b>. Imposta le variabili d'ambiente <code>TWILIO_ACCOUNT_SID, TWILIO_API_KEY, TWILIO_API_SECRET, TWILIO_TWIML_APP_SID</code> e riavvia.`}</p>
+      ${tw.twilio_ok ? `
+      <label>📞 Numero in uscita (caller ID)</label>
+      <div class="toolbar" style="margin-bottom:0">
+        <select id="set-callerid" style="min-width:260px"><option value="">— Nessuno (softphone disattivo) —</option></select>
+        <button class="btn primary" id="set-callerid-save">💾 Imposta numero</button>
+      </div>` : ''}
     </div>
     <div class="card">
       <b>📝 Note e promemoria</b>
@@ -826,6 +832,18 @@ async function viewImpostazioni() {
       <p class="muted" style="margin-top:8px">Cambia la tua password dalla sezione Utenti. Ricorda di cambiare la password admin predefinita al primo accesso.</p>
     </div>`;
   $('#set-save').onclick = async () => { await api('/admin/settings', { method: 'PUT', body: { note: $('#set-note').value } }); toast('Salvato'); };
+
+  if (tw.twilio_ok) {
+    api('/twilio/numbers').then(nums => {
+      $('#set-callerid').innerHTML = '<option value="">— Nessuno (softphone disattivo) —</option>' +
+        nums.map(n => `<option value="${esc(n.numero)}" ${tw.caller_id === n.numero ? 'selected' : ''}>${esc(n.numero)}</option>`).join('');
+    }).catch(e => toast(e.message, true));
+    $('#set-callerid-save').onclick = async () => {
+      await api('/twilio/caller-id', { method: 'PUT', body: { caller_id: $('#set-callerid').value } });
+      toast($('#set-callerid').value ? 'Numero in uscita impostato' : 'Softphone disattivato');
+      viewImpostazioni();
+    };
+  }
 }
 
 /* ================================================================
