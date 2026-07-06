@@ -1,0 +1,1126 @@
+/* ============ CRM TELEFONISTE - app frontend ============ */
+'use strict';
+
+let TOKEN = localStorage.getItem('crm_token') || null;
+let USER = null;
+let CURRENT_VIEW = null;
+let HEARTBEAT_TIMER = null;
+let REFRESH_TIMER = null;
+
+const ESITI_LABEL = {
+  da_chiamare: 'Da chiamare', in_chiamata: 'In chiamata', appuntamento_fissato: 'Appuntamento fissato',
+  richiamo: 'Richiamo', non_interessato: 'Non interessato', non_risponde: 'Non risponde',
+  segreteria: 'Segreteria', occupato: 'Occupato', numero_errato: 'Numero errato',
+  gia_fatto: 'Già fatto', blacklist: 'Black list', irraggiungibile: 'Irraggiungibile', fuori_zona: 'Fuori zona'
+};
+const ESITI_COLOR = {
+  appuntamento_fissato: 'green', richiamo: 'orange', non_interessato: 'red', blacklist: 'red',
+  numero_errato: 'red', da_chiamare: 'gray', in_chiamata: 'orange'
+};
+const ESITI_CHIAMATA = ['appuntamento_fissato','richiamo','non_interessato','non_risponde','segreteria','occupato','numero_errato','gia_fatto','blacklist','irraggiungibile','fuori_zona'];
+
+/* ---------- helpers ---------- */
+const $ = s => document.querySelector(s);
+const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const tag = (e) => `<span class="tag ${ESITI_COLOR[e] || ''}">${esc(ESITI_LABEL[e] || e || '—')}</span>`;
+const fmtDur = s => { s = s || 0; const m = Math.floor(s / 60); return m > 0 ? `${m}m ${s % 60}s` : `${s}s`; };
+const fmtDT = d => d ? new Date(d.replace(' ', 'T')).toLocaleString('it-IT', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
+const fmtD = d => d ? new Date(d).toLocaleDateString('it-IT', { weekday: 'short', day: '2-digit', month: '2-digit' }) : '—';
+const nomeCompleto = c => `${c.nome || ''} ${c.cognome || ''}`.trim();
+
+async function api(path, opts = {}) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (TOKEN) headers.Authorization = 'Bearer ' + TOKEN;
+  const res = await fetch('/api' + path, { ...opts, headers, body: opts.body ? JSON.stringify(opts.body) : undefined });
+  if (res.status === 401) { logout(false); throw new Error('Sessione scaduta'); }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'Errore server');
+  return data;
+}
+
+function toast(msg, err = false) {
+  const t = $('#toast');
+  t.textContent = msg;
+  t.className = 'toast' + (err ? ' err' : '');
+  clearTimeout(t._t);
+  t._t = setTimeout(() => t.classList.add('hidden'), 3500);
+}
+
+function openModal(title, bodyHtml) {
+  $('#modal-title').innerHTML = title;
+  $('#modal-body').innerHTML = bodyHtml;
+  $('#modal').classList.remove('hidden');
+}
+function closeModal() { $('#modal').classList.add('hidden'); }
+window.closeModal = closeModal;
+
+/* ---------- auth ---------- */
+async function boot() {
+  if (!TOKEN) return showLogin();
+  try {
+    USER = await api('/me');
+    showApp();
+  } catch { showLogin(); }
+}
+
+function showLogin() {
+  $('#login-screen').classList.remove('hidden');
+  $('#app').classList.add('hidden');
+}
+
+function logout(callApi = true) {
+  TOKEN = null; USER = null;
+  localStorage.removeItem('crm_token');
+  clearInterval(HEARTBEAT_TIMER); clearInterval(REFRESH_TIMER);
+  showLogin();
+}
+$('#logout-btn').onclick = () => logout();
+
+$('#login-form').onsubmit = async e => {
+  e.preventDefault();
+  $('#login-error').classList.add('hidden');
+  try {
+    const r = await fetch('/api/auth/login', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: $('#login-username').value, password: $('#login-password').value })
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Errore');
+    TOKEN = data.token; USER = data.user;
+    localStorage.setItem('crm_token', TOKEN);
+    showApp();
+  } catch (err) {
+    $('#login-error').textContent = err.message;
+    $('#login-error').classList.remove('hidden');
+  }
+};
+
+/* ---------- shell ---------- */
+const NAV_ADMIN = [
+  { sect: 'Principale' },
+  { id: 'dashboard', icon: '📊', label: 'Dashboard' },
+  { id: 'monitor', icon: '📡', label: 'Monitor live' },
+  { id: 'campagne', icon: '🚀', label: 'Campagne' },
+  { id: 'registro', icon: '📞', label: 'Registro chiamate' },
+  { sect: 'Gestione' },
+  { id: 'contatti', icon: '👤', label: 'Contatti' },
+  { id: 'richiami', icon: '🔄', label: 'Richiami' },
+  { id: 'appuntamenti', icon: '📅', label: 'Appuntamenti' },
+  { id: 'report', icon: '📈', label: 'Report' },
+  { sect: 'Amministrazione' },
+  { id: 'operatrici', icon: '👥', label: 'Utenti' },
+  { id: 'agenti', icon: '🧑‍💼', label: 'Agenti' },
+  { id: 'impostazioni', icon: '⚙️', label: 'Impostazioni' },
+];
+const NAV_OP = [
+  { sect: 'Lavoro' },
+  { id: 'postazione', icon: '☎️', label: 'Postazione' },
+  { id: 'richiami-op', icon: '🔄', label: 'I miei richiami' },
+  { id: 'chiamate-op', icon: '📞', label: 'Le mie chiamate' },
+  { id: 'appuntamenti-op', icon: '📅', label: 'I miei appuntamenti' },
+  { sect: 'Gestione' },
+  { id: 'contatti', icon: '👤', label: 'Contatti' },
+];
+
+function showApp() {
+  $('#login-screen').classList.add('hidden');
+  $('#app').classList.remove('hidden');
+  $('#user-name').textContent = USER.nome;
+  $('#user-role').textContent = USER.ruolo === 'admin' ? 'Admin' : 'Operatrice';
+  const nav = USER.ruolo === 'admin' ? NAV_ADMIN : NAV_OP;
+  $('#nav').innerHTML = nav.map(n => n.sect
+    ? `<div class="nav-section">${n.sect}</div>`
+    : `<a href="#" data-view="${n.id}">${n.icon} <span class="txt">${n.label}</span></a>`).join('');
+  $('#nav').querySelectorAll('a').forEach(a => a.onclick = e => { e.preventDefault(); go(a.dataset.view); });
+  if (USER.ruolo === 'operatore') startHeartbeat();
+  go(USER.ruolo === 'admin' ? 'dashboard' : 'postazione');
+}
+
+function go(view) {
+  CURRENT_VIEW = view;
+  clearInterval(REFRESH_TIMER);
+  $('#nav').querySelectorAll('a').forEach(a => a.classList.toggle('active', a.dataset.view === view));
+  const fn = VIEWS[view];
+  if (fn) fn();
+}
+
+/* ================================================================
+   VISTE ADMIN
+================================================================ */
+async function viewDashboard() {
+  const d = await api('/admin/dashboard');
+  $('#view').innerHTML = `
+    <h2 class="page-title">Dashboard <em>Operativa</em></h2>
+    <div class="cards-row">
+      <div class="stat-card"><div class="num">${d.chiamateOggi}</div><div class="lbl">Chiamate oggi</div></div>
+      <div class="stat-card"><div class="num">${d.operatoriOnline}</div><div class="lbl">Operatrici online</div></div>
+      <div class="stat-card"><div class="num">${d.appOggi}</div><div class="lbl">Appuntamenti oggi</div></div>
+      <div class="stat-card"><div class="num">${d.appDomani}</div><div class="lbl">Appuntamenti domani</div></div>
+      <div class="stat-card"><div class="num" style="color:${d.richiamiScaduti > 0 ? 'var(--red)' : 'inherit'}">${d.richiamiScaduti}</div><div class="lbl">Richiami scaduti</div></div>
+    </div>
+    <div class="card">
+      <b>Campagne attive</b>
+      <div style="margin-top:10px">${d.campagneAttive.length ? d.campagneAttive.map(c => `<span class="tag green">${esc(c.nome)}</span> `).join('') : '<span class="muted">Nessuna campagna attiva</span>'}</div>
+    </div>
+    <div class="card">
+      <b>Ultime chiamate</b>
+      <div class="table-wrap" style="margin-top:10px"><table>
+        <tr><th>Quando</th><th>Contatto</th><th>Operatrice</th><th>Durata</th><th>Esito</th></tr>
+        ${d.ultimeChiamate.map(c => `<tr><td>${fmtDT(c.started_at)}</td><td>${esc(c.contatto)}</td><td>${esc(c.operatore)}</td><td>${fmtDur(c.durata)}</td><td>${tag(c.esito)}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">Nessuna chiamata</td></tr>'}
+      </table></div>
+    </div>`;
+  REFRESH_TIMER = setInterval(() => { if (CURRENT_VIEW === 'dashboard') viewDashboard(); }, 15000);
+}
+
+/* ---------- MONITOR ---------- */
+async function viewMonitor() {
+  const rows = await api('/admin/monitor');
+  $('#view').innerHTML = `
+    <h2 class="page-title">Monitor <em>Live</em></h2>
+    <div class="monitor-grid">
+      ${rows.map(o => {
+        const inCall = o.stato === 'in_chiamata';
+        const stato = !o.online ? '<span class="dot off"></span>Offline'
+          : inCall ? '<span class="dot call"></span>In chiamata'
+          : o.stato === 'in_esito' ? '<span class="dot on"></span>Compila esito'
+          : '<span class="dot on"></span>Disponibile';
+        return `<div class="op-card ${inCall ? 'oncall' : ''}">
+          <b>${esc(o.nome)}</b>
+          <div style="margin:8px 0">${stato}</div>
+          ${o.contact ? `<div class="muted">📞 ${esc(o.contact.nome || '')} — ${esc(o.contact.telefono || '')}</div>` : ''}
+          ${o.since && o.online ? `<div class="muted" style="font-size:12px">da ${fmtDT(o.since)}</div>` : ''}
+          <div style="margin-top:8px; font-size:13px">Oggi: <b>${o.chiamate_oggi}</b> chiamate · ${o.minuti_oggi} min</div>
+        </div>`;
+      }).join('') || '<p class="muted">Nessuna operatrice registrata.</p>'}
+    </div>`;
+  REFRESH_TIMER = setInterval(() => { if (CURRENT_VIEW === 'monitor') viewMonitor(); }, 8000);
+}
+
+/* ---------- CAMPAGNE ---------- */
+async function viewCampagne() {
+  const rows = await api('/admin/campaigns');
+  const stTag = s => ({ bozza: 'gray', attiva: 'green', in_pausa: 'orange', completata: '', archiviata: 'gray' }[s] || '');
+  $('#view').innerHTML = `
+    <h2 class="page-title">Gestione <em>Campagne</em></h2>
+    <div class="toolbar">
+      <button class="btn primary" id="btn-new-camp">+ Nuova campagna</button>
+    </div>
+    <div class="table-wrap"><table>
+      <tr><th>Nome</th><th>Stato</th><th>Modalità</th><th>Tot</th><th>Fatti</th><th>Da fare</th><th>App.</th><th>Creata</th><th>Azioni</th></tr>
+      ${rows.map(c => `<tr>
+        <td><b>${esc(c.nome)}</b><br><span class="muted" style="font-size:12px">${esc(c.descrizione || '')}</span></td>
+        <td><span class="tag ${stTag(c.stato)}">${esc(c.stato.replace('_', ' '))}</span></td>
+        <td>${c.modalita === 'coda' ? 'Coda automatica' : 'Liste assegnate'}</td>
+        <td>${c.tot}</td><td>${c.fatti}</td><td>${c.da_fare}</td><td>${c.appuntamenti}</td>
+        <td>${fmtDT(c.created_at)}</td>
+        <td style="white-space:nowrap">
+          <button class="btn" data-open="${c.id}">👥 Contatti</button>
+          <button class="btn" data-edit="${c.id}">✏️</button>
+          ${c.stato === 'attiva'
+            ? `<button class="btn" data-stato="${c.id}|in_pausa">⏸</button>`
+            : c.stato !== 'archiviata' ? `<button class="btn success" data-stato="${c.id}|attiva">▶</button>` : ''}
+          <button class="btn danger" data-del="${c.id}">🗑</button>
+        </td>
+      </tr>`).join('') || '<tr><td colspan="9" class="muted">Nessuna campagna</td></tr>'}
+    </table></div>`;
+
+  $('#btn-new-camp').onclick = () => campaignForm();
+  $('#view').querySelectorAll('[data-edit]').forEach(b => b.onclick = () => campaignForm(rows.find(c => c.id == b.dataset.edit)));
+  $('#view').querySelectorAll('[data-open]').forEach(b => b.onclick = () => campaignContacts(rows.find(c => c.id == b.dataset.open)));
+  $('#view').querySelectorAll('[data-stato]').forEach(b => b.onclick = async () => {
+    const [id, stato] = b.dataset.stato.split('|');
+    await api(`/admin/campaigns/${id}`, { method: 'PUT', body: { stato } });
+    toast(stato === 'attiva' ? 'Campagna avviata' : 'Campagna in pausa'); viewCampagne();
+  });
+  $('#view').querySelectorAll('[data-del]').forEach(b => b.onclick = async () => {
+    if (!confirm('Eliminare la campagna? I contatti NON verranno eliminati.')) return;
+    await api(`/admin/campaigns/${b.dataset.del}`, { method: 'DELETE' });
+    toast('Campagna eliminata'); viewCampagne();
+  });
+}
+
+function campaignForm(c = null) {
+  openModal(c ? 'Modifica campagna' : 'Nuova campagna', `
+    <label>Nome *</label><input id="cf-nome" style="width:100%" value="${esc(c?.nome || '')}">
+    <label>Descrizione</label><textarea id="cf-desc">${esc(c?.descrizione || '')}</textarea>
+    <label>Note operative (visibili alle operatrici)</label><textarea id="cf-note">${esc(c?.note || '')}</textarea>
+    <div class="form-grid">
+      <div><label>Modalità distribuzione</label>
+        <select id="cf-mod" style="width:100%">
+          <option value="coda" ${c?.modalita !== 'assegnata' ? 'selected' : ''}>Coda automatica</option>
+          <option value="assegnata" ${c?.modalita === 'assegnata' ? 'selected' : ''}>Liste assegnate dall'admin</option>
+        </select></div>
+      <div><label>Max tentativi (non risponde/occupato)</label><input id="cf-max" type="number" min="1" max="10" style="width:100%" value="${c?.max_tentativi || 3}"></div>
+      <div><label>Obiettivo appuntamenti (0 = illimitato)</label><input id="cf-ob" type="number" min="0" style="width:100%" value="${c?.obiettivo_app || 0}"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Annulla</button>
+      <button class="btn primary" id="cf-save">💾 Salva</button>
+    </div>`);
+  $('#cf-save').onclick = async () => {
+    const body = { nome: $('#cf-nome').value.trim(), descrizione: $('#cf-desc').value, note: $('#cf-note').value, modalita: $('#cf-mod').value, max_tentativi: $('#cf-max').value, obiettivo_app: $('#cf-ob').value };
+    if (!body.nome) return toast('Nome obbligatorio', true);
+    try {
+      if (c) await api(`/admin/campaigns/${c.id}`, { method: 'PUT', body });
+      else await api('/admin/campaigns', { method: 'POST', body });
+      closeModal(); toast('Campagna salvata'); viewCampagne();
+    } catch (e) { toast(e.message, true); }
+  };
+}
+
+/* Gestione contatti dentro una campagna */
+async function campaignContacts(camp) {
+  const [inCamp, users] = await Promise.all([
+    api(`/admin/campaigns/${camp.id}/contacts`),
+    api('/admin/users')
+  ]);
+  const ops = users.filter(u => u.ruolo === 'operatore' && u.attivo);
+  $('#view').innerHTML = `
+    <h2 class="page-title">Campagna: <em>${esc(camp.nome)}</em></h2>
+    <div class="toolbar">
+      <button class="btn" id="back-camp">← Campagne</button>
+      <button class="btn primary" id="btn-add-cc">➕ Aggiungi contatti</button>
+      <span class="muted">${inCamp.length} contatti in campagna · modalità: <b>${camp.modalita === 'coda' ? 'coda automatica' : 'liste assegnate'}</b></span>
+      <span class="spacer"></span>
+      <span id="cc-selinfo" class="muted">0 selezionati</span>
+      ${camp.modalita === 'assegnata' ? `
+        <select id="cc-assign-user"><option value="">— assegna a —</option>${ops.map(o => `<option value="${o.id}">${esc(o.nome)}</option>`).join('')}</select>
+        <button class="btn" id="btn-assign">Assegna</button>` : ''}
+      <button class="btn" id="btn-requeue">↩ Rimetti in coda</button>
+      <button class="btn danger" id="btn-remove-cc">➖ Rimuovi</button>
+    </div>
+    <div class="table-wrap"><table>
+      <tr><th class="checkbox-cell"><input type="checkbox" id="cc-all"></th><th>Nome</th><th>Telefono</th><th>Comune</th><th>Stato coda</th><th>Esito</th><th>Tent.</th><th>Assegnato a</th></tr>
+      ${inCamp.map(r => `<tr>
+        <td><input type="checkbox" class="cc-check" value="${r.id}"></td>
+        <td>${esc(nomeCompleto(r))}</td><td>${esc(r.telefono)}</td><td>${esc(r.comune || '')}</td>
+        <td><span class="tag ${r.cc_stato === 'da_chiamare' ? 'gray' : r.cc_stato === 'lavorato' ? 'green' : 'orange'}">${r.cc_stato.replace('_', ' ')}</span></td>
+        <td>${r.cc_esito ? tag(r.cc_esito) : '—'}</td><td>${r.tentativi}</td>
+        <td>${esc(r.assegnato_a || '—')}</td>
+      </tr>`).join('') || '<tr><td colspan="8" class="muted">Nessun contatto in campagna</td></tr>'}
+    </table></div>`;
+
+  const selected = () => [...$('#view').querySelectorAll('.cc-check:checked')].map(c => parseInt(c.value));
+  const updateSel = () => $('#cc-selinfo').textContent = `${selected().length} selezionati`;
+  $('#view').querySelectorAll('.cc-check').forEach(c => c.onchange = updateSel);
+  $('#cc-all').onchange = e => { $('#view').querySelectorAll('.cc-check').forEach(c => c.checked = e.target.checked); updateSel(); };
+  $('#back-camp').onclick = () => viewCampagne();
+  $('#btn-add-cc').onclick = () => addContactsToCampaign(camp);
+  $('#btn-remove-cc').onclick = async () => {
+    const ids = selected(); if (!ids.length) return toast('Seleziona dei contatti', true);
+    await api(`/admin/campaigns/${camp.id}/contacts/remove`, { method: 'POST', body: { contact_ids: ids } });
+    toast('Contatti rimossi'); campaignContacts(camp);
+  };
+  $('#btn-requeue').onclick = async () => {
+    const ids = selected(); if (!ids.length) return toast('Seleziona dei contatti', true);
+    await api(`/admin/campaigns/${camp.id}/requeue`, { method: 'POST', body: { contact_ids: ids } });
+    toast('Rimessi in coda'); campaignContacts(camp);
+  };
+  const ba = $('#btn-assign');
+  if (ba) ba.onclick = async () => {
+    const ids = selected(); if (!ids.length) return toast('Seleziona dei contatti', true);
+    const uid = $('#cc-assign-user').value || null;
+    await api(`/admin/campaigns/${camp.id}/assign`, { method: 'POST', body: { contact_ids: ids, user_id: uid ? parseInt(uid) : null } });
+    toast(uid ? 'Contatti assegnati' : 'Assegnazione rimossa'); campaignContacts(camp);
+  };
+}
+
+async function addContactsToCampaign(camp) {
+  const data = await api('/contacts?per=200');
+  const comuni = await api('/contacts/comuni');
+  openModal(`Aggiungi contatti a "${esc(camp.nome)}"`, `
+    <div class="toolbar">
+      <input id="ac-search" placeholder="🔍 cerca..." style="flex:1">
+      <select id="ac-esito"><option value="">Tutti gli esiti</option>${Object.entries(ESITI_LABEL).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>
+      <select id="ac-comune"><option value="">Tutti i comuni</option>${comuni.map(c => `<option>${esc(c)}</option>`).join('')}</select>
+    </div>
+    <div class="table-wrap" style="max-height:320px"><table id="ac-table"></table></div>
+    <div class="modal-actions">
+      <button class="btn" id="ac-selall">✓ Seleziona visibili</button>
+      <button class="btn" onclick="closeModal()">Annulla</button>
+      <button class="btn primary" id="ac-add">➕ Aggiungi selezionati</button>
+    </div>`);
+
+  async function render() {
+    const q = new URLSearchParams({ search: $('#ac-search').value, esito: $('#ac-esito').value, comune: $('#ac-comune').value, per: 200 });
+    const d = await api('/contacts?' + q);
+    $('#ac-table').innerHTML = `<tr><th class="checkbox-cell"></th><th>Nome</th><th>Telefono</th><th>Comune</th><th>Esito</th></tr>` +
+      d.rows.map(c => `<tr><td><input type="checkbox" class="ac-check" value="${c.id}"></td><td>${esc(nomeCompleto(c))}</td><td>${esc(c.telefono)}</td><td>${esc(c.comune || '')}</td><td>${tag(c.esito)}</td></tr>`).join('');
+  }
+  ['ac-search', 'ac-esito', 'ac-comune'].forEach(id => $('#' + id).oninput = render);
+  $('#ac-selall').onclick = () => $('#ac-table').querySelectorAll('.ac-check').forEach(c => c.checked = true);
+  $('#ac-add').onclick = async () => {
+    const ids = [...$('#ac-table').querySelectorAll('.ac-check:checked')].map(c => parseInt(c.value));
+    if (!ids.length) return toast('Nessun contatto selezionato', true);
+    const r = await api(`/admin/campaigns/${camp.id}/contacts`, { method: 'POST', body: { contact_ids: ids } });
+    closeModal(); toast(`${r.aggiunti} contatti aggiunti`); campaignContacts(camp);
+  };
+  render();
+}
+
+/* ---------- CONTATTI (admin + operatore) ---------- */
+let contactsPage = 1;
+async function viewContatti() {
+  const isAdmin = USER.ruolo === 'admin';
+  $('#view').innerHTML = `
+    <h2 class="page-title">Gestione <em>Contatti</em></h2>
+    <div class="toolbar">
+      <input id="ct-search" placeholder="🔍 nome o telefono..." style="width:220px">
+      <select id="ct-esito"><option value="">Tutti gli esiti</option>${Object.entries(ESITI_LABEL).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>
+      <select id="ct-comune"><option value="">Tutti i comuni</option></select>
+      <span class="spacer"></span>
+      ${isAdmin ? `<button class="btn" id="ct-import">⬆ Importa CSV</button>
+      <a class="btn" id="ct-export" href="#">⬇ Esporta CSV</a>` : ''}
+      <button class="btn primary" id="ct-new">+ Nuovo</button>
+    </div>
+    <div id="ct-table-wrap"></div>`;
+
+  api('/contacts/comuni').then(cs => $('#ct-comune').innerHTML += cs.map(c => `<option>${esc(c)}</option>`).join(''));
+
+  async function render() {
+    const q = new URLSearchParams({ search: $('#ct-search').value, esito: $('#ct-esito').value, comune: $('#ct-comune').value, page: contactsPage, per: 50 });
+    const d = await api('/contacts?' + q);
+    const pages = Math.max(Math.ceil(d.total / d.per), 1);
+    $('#ct-table-wrap').innerHTML = `
+      <div class="table-wrap"><table>
+        <tr><th>Nome</th><th>Telefono</th><th>Comune</th><th>Offerto da</th><th>Parentela</th><th>Esito</th><th>Azioni</th></tr>
+        ${d.rows.map(c => `<tr>
+          <td><b>${esc(nomeCompleto(c))}</b></td><td>${esc(c.telefono)}</td><td>${esc(c.comune || '')}</td>
+          <td>${esc(c.offerto_da || '')}</td><td>${esc(c.parentela || '')}</td><td>${tag(c.esito)}</td>
+          <td style="white-space:nowrap">
+            <button class="btn" data-view-ct="${c.id}">👁</button>
+            <button class="btn" data-edit-ct="${c.id}">✏️</button>
+            ${isAdmin ? `<button class="btn danger" data-del-ct="${c.id}">🗑</button>` : ''}
+          </td></tr>`).join('') || '<tr><td colspan="7" class="muted">Nessun contatto</td></tr>'}
+      </table></div>
+      <div class="pagination">
+        <button class="btn" id="pg-prev" ${contactsPage <= 1 ? 'disabled' : ''}>← Prec</button>
+        <span>${contactsPage} / ${pages} — ${d.total} contatti</span>
+        <button class="btn" id="pg-next" ${contactsPage >= pages ? 'disabled' : ''}>Succ →</button>
+      </div>`;
+    $('#pg-prev').onclick = () => { contactsPage--; render(); };
+    $('#pg-next').onclick = () => { contactsPage++; render(); };
+    $('#ct-table-wrap').querySelectorAll('[data-edit-ct]').forEach(b => b.onclick = () => contactForm(d.rows.find(c => c.id == b.dataset.editCt), render));
+    $('#ct-table-wrap').querySelectorAll('[data-view-ct]').forEach(b => b.onclick = () => contactDetail(b.dataset.viewCt));
+    $('#ct-table-wrap').querySelectorAll('[data-del-ct]').forEach(b => b.onclick = async () => {
+      if (!confirm('Eliminare il contatto e tutto il suo storico?')) return;
+      await api('/contacts/' + b.dataset.delCt, { method: 'DELETE' }); toast('Contatto eliminato'); render();
+    });
+  }
+  ['ct-search', 'ct-esito', 'ct-comune'].forEach(id => $('#' + id).oninput = () => { contactsPage = 1; render(); });
+  $('#ct-new').onclick = () => contactForm(null, render);
+  if (isAdmin) {
+    $('#ct-import').onclick = () => importCsv(render);
+    $('#ct-export').onclick = async e => {
+      e.preventDefault();
+      const res = await fetch('/api/contacts-export.csv', { headers: { Authorization: 'Bearer ' + TOKEN } });
+      const blob = await res.blob();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob); a.download = 'contatti.csv'; a.click();
+    };
+  }
+  render();
+}
+
+function contactForm(c, onSave) {
+  openModal(c ? 'Modifica contatto' : 'Nuovo contatto', `
+    <div class="form-grid">
+      <div><label>Nome *</label><input id="cf2-nome" style="width:100%" value="${esc(c?.nome || '')}"></div>
+      <div><label>Cognome</label><input id="cf2-cognome" style="width:100%" value="${esc(c?.cognome || '')}"></div>
+      <div><label>Telefono *</label><input id="cf2-tel" style="width:100%" value="${esc(c?.telefono || '')}"></div>
+      <div><label>Comune</label><input id="cf2-comune" style="width:100%" value="${esc(c?.comune || '')}"></div>
+      <div><label>Offerto da</label><input id="cf2-off" style="width:100%" value="${esc(c?.offerto_da || '')}"></div>
+      <div><label>Parentela</label><input id="cf2-par" style="width:100%" value="${esc(c?.parentela || '')}"></div>
+      <div class="full"><label>Esito</label>
+        <select id="cf2-esito" style="width:100%">${Object.entries(ESITI_LABEL).map(([k, v]) => `<option value="${k}" ${c?.esito === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
+      <div class="full"><label>Note</label><textarea id="cf2-note">${esc(c?.note || '')}</textarea></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Annulla</button>
+      <button class="btn primary" id="cf2-save">💾 Salva</button>
+    </div>`);
+  $('#cf2-save').onclick = async () => {
+    const body = { nome: $('#cf2-nome').value.trim(), cognome: $('#cf2-cognome').value.trim(), telefono: $('#cf2-tel').value.trim(), comune: $('#cf2-comune').value.trim(), offerto_da: $('#cf2-off').value.trim(), parentela: $('#cf2-par').value.trim(), esito: $('#cf2-esito').value, note: $('#cf2-note').value };
+    if (!body.nome || !body.telefono) return toast('Nome e telefono obbligatori', true);
+    try {
+      if (c) await api('/contacts/' + c.id, { method: 'PUT', body });
+      else await api('/contacts', { method: 'POST', body });
+      closeModal(); toast('Contatto salvato'); onSave && onSave();
+    } catch (e) { toast(e.message, true); }
+  };
+}
+
+async function contactDetail(id) {
+  const c = await api('/contacts/' + id);
+  openModal(esc(nomeCompleto(c)), `
+    <p><b>📞 ${esc(c.telefono)}</b> · ${esc(c.comune || '—')} · ${tag(c.esito)}</p>
+    <p class="muted">Offerto da: ${esc(c.offerto_da || '—')} · Parentela: ${esc(c.parentela || '—')}</p>
+    ${c.note ? `<p style="margin-top:8px">📝 ${esc(c.note)}</p>` : ''}
+    <h4 style="margin:14px 0 6px">Storico chiamate</h4>
+    <div class="table-wrap" style="max-height:200px"><table>
+      ${c.storico_chiamate.map(k => `<tr><td>${fmtDT(k.started_at)}</td><td>${esc(k.operatore)}</td><td>${fmtDur(k.durata)}</td><td>${tag(k.esito)}</td><td>${esc(k.note || '')}</td></tr>`).join('') || '<tr><td class="muted">Nessuna chiamata</td></tr>'}
+    </table></div>
+    ${c.richiami.length ? `<h4 style="margin:14px 0 6px">Richiami pendenti</h4>${c.richiami.map(r => `<div>🔄 ${fmtDT(r.richiamo_at)} ${esc(r.note || '')}</div>`).join('')}` : ''}
+    ${c.appuntamenti.length ? `<h4 style="margin:14px 0 6px">Appuntamenti</h4>${c.appuntamenti.map(a => `<div>📅 ${a.data} ${a.ora || ''} — ${esc(a.indirizzo || '')} (${a.stato})</div>`).join('')}` : ''}
+    <div class="modal-actions"><button class="btn" onclick="closeModal()">Chiudi</button></div>`);
+}
+
+function importCsv(onDone) {
+  openModal('Importa contatti CSV', `
+    <p class="muted">Colonne: <b>nome, cognome, telefono, comune, offerto_da, parentela</b> (prima riga = intestazione, separatore , o ;)</p>
+    <input type="file" id="csv-file" accept=".csv,text/csv" style="margin:14px 0; width:100%">
+    <div id="csv-preview"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Annulla</button>
+      <button class="btn primary" id="csv-go" disabled>⬆ Importa</button>
+    </div>`);
+  let rows = [];
+  $('#csv-file').onchange = e => {
+    const f = e.target.files[0]; if (!f) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const sep = reader.result.includes(';') && !reader.result.split('\n')[0].includes(',') ? ';' : ',';
+      const lines = reader.result.split(/\r?\n/).filter(l => l.trim());
+      const head = lines[0].toLowerCase().split(sep).map(h => h.trim().replace(/"/g, ''));
+      rows = lines.slice(1).map(l => {
+        const vals = l.split(sep).map(v => v.trim().replace(/^"|"$/g, ''));
+        const o = {}; head.forEach((h, i) => o[h] = vals[i] || ''); return o;
+      });
+      $('#csv-preview').innerHTML = `<p><b>${rows.length}</b> righe trovate. Anteprima:</p>
+        <div class="table-wrap" style="max-height:180px"><table>
+        <tr><th>Nome</th><th>Cognome</th><th>Telefono</th><th>Comune</th></tr>
+        ${rows.slice(0, 8).map(r => `<tr><td>${esc(r.nome)}</td><td>${esc(r.cognome)}</td><td>${esc(r.telefono)}</td><td>${esc(r.comune)}</td></tr>`).join('')}
+        </table></div>`;
+      $('#csv-go').disabled = rows.length === 0;
+    };
+    reader.readAsText(f);
+  };
+  $('#csv-go').onclick = async () => {
+    const r = await api('/contacts/import', { method: 'POST', body: { rows } });
+    closeModal(); toast(`Importati ${r.inseriti} contatti (${r.saltati} saltati)`); onDone && onDone();
+  };
+}
+
+/* ---------- REGISTRO CHIAMATE (admin) ---------- */
+async function viewRegistro() {
+  const [users, camps] = await Promise.all([api('/admin/users'), api('/admin/campaigns')]);
+  $('#view').innerHTML = `
+    <h2 class="page-title">Registro <em>Chiamate</em></h2>
+    <div class="toolbar">
+      <select id="rg-esito"><option value="">Tutti gli esiti</option>${ESITI_CHIAMATA.map(k => `<option value="${k}">${ESITI_LABEL[k]}</option>`).join('')}</select>
+      <select id="rg-user"><option value="">Tutte le operatrici</option>${users.filter(u => u.ruolo === 'operatore').map(u => `<option value="${u.id}">${esc(u.nome)}</option>`).join('')}</select>
+      <select id="rg-camp"><option value="">Tutte le campagne</option>${camps.map(c => `<option value="${c.id}">${esc(c.nome)}</option>`).join('')}</select>
+      <input type="date" id="rg-from"> <input type="date" id="rg-to">
+    </div>
+    <div id="rg-table"></div>`;
+  async function render() {
+    const q = new URLSearchParams({ esito: $('#rg-esito').value, user_id: $('#rg-user').value, campaign_id: $('#rg-camp').value, from: $('#rg-from').value, to: $('#rg-to').value, per: 100 });
+    const d = await api('/admin/calls?' + q);
+    $('#rg-table').innerHTML = `<p class="muted" style="margin-bottom:8px">${d.total} chiamate</p>
+      <div class="table-wrap"><table>
+      <tr><th>Data e ora</th><th>Contatto</th><th>Numero</th><th>Operatrice</th><th>Campagna</th><th>Durata</th><th>Esito</th><th>Note</th></tr>
+      ${d.rows.map(c => `<tr><td>${fmtDT(c.started_at)}</td><td>${esc((c.contatto_nome || '') + ' ' + (c.contatto_cognome || ''))}</td>
+        <td>${esc(c.contatto_telefono)}</td><td>${esc(c.operatore)}</td><td>${esc(c.campagna || '—')}</td>
+        <td>${fmtDur(c.durata)}</td><td>${tag(c.esito)}</td><td>${esc(c.note || '')}</td></tr>`).join('') || '<tr><td colspan="8" class="muted">Nessuna chiamata</td></tr>'}
+      </table></div>`;
+  }
+  ['rg-esito', 'rg-user', 'rg-camp', 'rg-from', 'rg-to'].forEach(id => $('#' + id).onchange = render);
+  render();
+}
+
+/* ---------- RICHIAMI (admin) ---------- */
+async function viewRichiami() {
+  const rows = await api('/admin/callbacks');
+  const scaduto = r => new Date(r.richiamo_at.replace(' ', 'T')) <= new Date();
+  $('#view').innerHTML = `
+    <h2 class="page-title">Richiami <em>Programmati</em></h2>
+    <div class="table-wrap"><table>
+      <tr><th>Presa il</th><th>Da richiamare</th><th>Contatto</th><th>Telefono</th><th>Campagna</th><th>Operatrice</th><th>Note</th><th>Azioni</th></tr>
+      ${rows.map(r => `<tr>
+        <td>${fmtDT(r.presa_at)}</td>
+        <td>${scaduto(r) ? `<span class="tag red">${fmtDT(r.richiamo_at)}</span>` : fmtDT(r.richiamo_at)}</td>
+        <td>${esc((r.contatto_nome || '') + ' ' + (r.contatto_cognome || ''))}</td><td>${esc(r.telefono)}</td>
+        <td>${esc(r.campagna || '—')}</td><td>${esc(r.operatore || 'chiunque')}</td><td>${esc(r.note || '')}</td>
+        <td style="white-space:nowrap">
+          <button class="btn" data-edit-cb="${r.id}">✏️</button>
+          <button class="btn danger" data-del-cb="${r.id}">🗑</button>
+        </td></tr>`).join('') || '<tr><td colspan="8" class="muted">Nessun richiamo pendente</td></tr>'}
+    </table></div>`;
+  $('#view').querySelectorAll('[data-del-cb]').forEach(b => b.onclick = async () => {
+    await api('/admin/callbacks/' + b.dataset.delCb, { method: 'DELETE' }); toast('Richiamo annullato'); viewRichiami();
+  });
+  $('#view').querySelectorAll('[data-edit-cb]').forEach(b => b.onclick = () => {
+    const r = rows.find(x => x.id == b.dataset.editCb);
+    const dt = r.richiamo_at.replace(' ', 'T').slice(0, 16);
+    openModal('Modifica richiamo', `
+      <p><b>${esc((r.contatto_nome || '') + ' ' + (r.contatto_cognome || ''))}</b> — ${esc(r.telefono)}</p>
+      <label>Nuova data/ora *</label><input type="datetime-local" id="cb-dt" value="${dt}" style="width:100%">
+      <label>Note</label><textarea id="cb-note">${esc(r.note || '')}</textarea>
+      <div class="modal-actions"><button class="btn" onclick="closeModal()">Annulla</button><button class="btn primary" id="cb-save">💾 Salva</button></div>`);
+    $('#cb-save').onclick = async () => {
+      await api('/admin/callbacks/' + r.id, { method: 'PUT', body: { richiamo_at: $('#cb-dt').value.replace('T', ' '), note: $('#cb-note').value } });
+      closeModal(); toast('Richiamo aggiornato'); viewRichiami();
+    };
+  });
+}
+
+/* ---------- APPUNTAMENTI (admin: calendario + lista) ---------- */
+let calMonth = new Date();
+async function viewAppuntamenti() {
+  const first = new Date(calMonth.getFullYear(), calMonth.getMonth(), 1);
+  const last = new Date(calMonth.getFullYear(), calMonth.getMonth() + 1, 0);
+  const iso = d => d.toISOString().slice(0, 10);
+  const [apps, agents] = await Promise.all([
+    api(`/admin/appointments?from=${iso(new Date(first - 6 * 864e5))}&to=${iso(new Date(+last + 6 * 864e5))}`),
+    api('/admin/agents')
+  ]);
+  const mesi = ['Gennaio','Febbraio','Marzo','Aprile','Maggio','Giugno','Luglio','Agosto','Settembre','Ottobre','Novembre','Dicembre'];
+
+  // celle calendario (lun-dom)
+  let start = new Date(first); start.setDate(start.getDate() - ((start.getDay() + 6) % 7));
+  const cells = [];
+  for (let i = 0; i < 42; i++) { cells.push(new Date(start)); start.setDate(start.getDate() + 1); }
+  const todayIso = iso(new Date());
+
+  $('#view').innerHTML = `
+    <h2 class="page-title">Calendario <em>Appuntamenti</em></h2>
+    <div class="toolbar">
+      <button class="btn" id="cal-prev">← Prec.</button>
+      <b style="min-width:150px;text-align:center">${mesi[calMonth.getMonth()]} ${calMonth.getFullYear()}</b>
+      <button class="btn" id="cal-next">Succ. →</button>
+      <button class="btn" id="cal-today">Oggi</button>
+      <span class="spacer"></span>
+      <button class="btn primary" id="app-new">+ Nuovo appuntamento</button>
+    </div>
+    <div class="cal-grid" style="margin-bottom:6px">${['Lun','Mar','Mer','Gio','Ven','Sab','Dom'].map(d => `<div class="cal-head">${d}</div>`).join('')}</div>
+    <div class="cal-grid">
+      ${cells.map(d => {
+        const dIso = iso(d);
+        const dayApps = apps.filter(a => a.data === dIso && a.stato !== 'annullato');
+        return `<div class="cal-cell ${dIso === todayIso ? 'today' : ''} ${d.getMonth() !== calMonth.getMonth() ? 'other' : ''}" data-day="${dIso}">
+          <div class="day-num">${d.getDate()}</div>
+          ${dayApps.slice(0, 3).map(a => `<div class="cal-app">${a.ora || ''} ${esc(a.contatto_nome || '?')}</div>`).join('')}
+          ${dayApps.length > 3 ? `<div class="muted">+${dayApps.length - 3}</div>` : ''}
+        </div>`;
+      }).join('')}
+    </div>
+    <div class="card" style="margin-top:16px">
+      <b>Prossimi appuntamenti</b>
+      <div class="table-wrap" style="margin-top:10px"><table>
+        <tr><th>Data</th><th>Ora</th><th>Contatto</th><th>Telefono</th><th>Agente</th><th>Indirizzo</th><th>Presa da</th><th>Stato</th><th></th></tr>
+        ${apps.filter(a => a.data >= todayIso).map(a => appRow(a)).join('') || '<tr><td colspan="9" class="muted">Nessun appuntamento</td></tr>'}
+      </table></div>
+    </div>`;
+
+  function appRow(a) {
+    return `<tr><td>${fmtD(a.data)}</td><td>${a.ora || '—'}</td>
+      <td>${esc((a.contatto_nome || '') + ' ' + (a.contatto_cognome || '')) || '—'}</td><td>${esc(a.telefono || '')}</td>
+      <td>${esc(a.agente || '—')}</td><td>${esc(a.indirizzo || '')}</td><td>${esc(a.operatore || '—')}</td>
+      <td><span class="tag ${a.stato === 'confermato' ? 'green' : a.stato === 'annullato' ? 'red' : ''}">${a.stato}</span></td>
+      <td style="white-space:nowrap"><button class="btn" data-edit-app="${a.id}">✏️</button> <button class="btn danger" data-del-app="${a.id}">🗑</button></td></tr>`;
+  }
+
+  $('#cal-prev').onclick = () => { calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth() - 1, 1); viewAppuntamenti(); };
+  $('#cal-next').onclick = () => { calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth() + 1, 1); viewAppuntamenti(); };
+  $('#cal-today').onclick = () => { calMonth = new Date(); viewAppuntamenti(); };
+  $('#app-new').onclick = () => appointmentForm(null, agents, () => viewAppuntamenti());
+  $('#view').querySelectorAll('[data-edit-app]').forEach(b => b.onclick = () => appointmentForm(apps.find(a => a.id == b.dataset.editApp), agents, () => viewAppuntamenti()));
+  $('#view').querySelectorAll('[data-del-app]').forEach(b => b.onclick = async () => {
+    if (!confirm('Eliminare appuntamento?')) return;
+    await api('/admin/appointments/' + b.dataset.delApp, { method: 'DELETE' }); toast('Eliminato'); viewAppuntamenti();
+  });
+  $('#view').querySelectorAll('.cal-cell').forEach(c => c.onclick = () => {
+    const day = c.dataset.day;
+    const dayApps = apps.filter(a => a.data === day);
+    openModal('Appuntamenti del ' + fmtD(day), dayApps.length
+      ? `<div class="table-wrap"><table>${dayApps.map(a => `<tr><td>${a.ora || '—'}</td><td>${esc(a.contatto_nome || '')}</td><td>${esc(a.indirizzo || '')}</td><td>${esc(a.agente || '—')}</td><td><span class="tag">${a.stato}</span></td></tr>`).join('')}</table></div>`
+      : '<p class="muted">Nessun appuntamento in questo giorno.</p>');
+  });
+}
+
+function appointmentForm(a, agents, onSave) {
+  openModal(a ? 'Modifica appuntamento' : 'Nuovo appuntamento', `
+    ${a?.contatto_nome ? `<p><b>${esc(a.contatto_nome + ' ' + (a.contatto_cognome || ''))}</b> — ${esc(a.telefono || '')}</p>` : ''}
+    <div class="form-grid">
+      <div><label>Data *</label><input type="date" id="ap-data" style="width:100%" value="${a?.data || ''}"></div>
+      <div><label>Ora</label><input type="time" id="ap-ora" style="width:100%" value="${a?.ora || ''}"></div>
+      <div class="full"><label>Indirizzo</label><input id="ap-ind" style="width:100%" value="${esc(a?.indirizzo || '')}"></div>
+      <div><label>Agente</label><select id="ap-agente" style="width:100%"><option value="">— Nessuno —</option>${agents.map(g => `<option value="${g.id}" ${a?.agent_id == g.id ? 'selected' : ''}>${esc(g.nome)}</option>`).join('')}</select></div>
+      <div><label>Stato</label><select id="ap-stato" style="width:100%">${['confermato','fatto','annullato'].map(s => `<option ${a?.stato === s ? 'selected' : ''}>${s}</option>`).join('')}</select></div>
+      <div class="full"><label>Note</label><textarea id="ap-note">${esc(a?.note || '')}</textarea></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Annulla</button>
+      <button class="btn primary" id="ap-save">💾 Salva</button>
+    </div>`);
+  $('#ap-save').onclick = async () => {
+    const body = { data: $('#ap-data').value, ora: $('#ap-ora').value, indirizzo: $('#ap-ind').value, agent_id: $('#ap-agente').value ? parseInt($('#ap-agente').value) : null, stato: $('#ap-stato').value, note: $('#ap-note').value };
+    if (!body.data) return toast('Data obbligatoria', true);
+    try {
+      if (a) await api('/admin/appointments/' + a.id, { method: 'PUT', body });
+      else await api('/admin/appointments', { method: 'POST', body });
+      closeModal(); toast('Appuntamento salvato'); onSave && onSave();
+    } catch (e) { toast(e.message, true); }
+  };
+}
+
+/* ---------- REPORT ---------- */
+async function viewReport() {
+  const today = new Date().toISOString().slice(0, 10);
+  const monthAgo = new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10);
+  $('#view').innerHTML = `
+    <h2 class="page-title">Report e <em>Statistiche</em></h2>
+    <div class="toolbar">
+      <label style="margin:0">Dal</label><input type="date" id="rp-from" value="${monthAgo}">
+      <label style="margin:0">Al</label><input type="date" id="rp-to" value="${today}">
+    </div>
+    <div id="rp-body"></div>`;
+  async function render() {
+    const d = await api(`/admin/reports/summary?from=${$('#rp-from').value}&to=${$('#rp-to').value}`);
+    const conv = d.totali.chiamate ? (100 * d.totali.appuntamenti / d.totali.chiamate).toFixed(1) : 0;
+    const maxG = Math.max(...d.perGiorno.map(g => g.chiamate), 1);
+    const maxE = Math.max(...d.perEsito.map(e => e.n), 1);
+    $('#rp-body').innerHTML = `
+      <div class="cards-row">
+        <div class="stat-card"><div class="num">${d.totali.chiamate}</div><div class="lbl">Chiamate totali</div></div>
+        <div class="stat-card"><div class="num">${d.totali.appuntamenti || 0}</div><div class="lbl">Appuntamenti presi</div></div>
+        <div class="stat-card"><div class="num">${conv}%</div><div class="lbl">Conversione</div></div>
+        <div class="stat-card"><div class="num">${fmtDur(Math.round(d.totali.avg_sec))}</div><div class="lbl">Durata media</div></div>
+        <div class="stat-card"><div class="num">${Math.round(d.totali.sec / 3600 * 10) / 10}h</div><div class="lbl">Ore al telefono</div></div>
+      </div>
+      <div class="card"><b>Andamento giornaliero</b><div style="margin-top:12px">
+        ${d.perGiorno.map(g => `<div class="bar-row"><div class="bar-label">${fmtD(g.giorno)}</div><div class="bar" style="width:${(g.chiamate / maxG * 100).toFixed(0)}%"></div><div class="bar-val">${g.chiamate} (${g.appuntamenti} app.)</div></div>`).join('') || '<span class="muted">Nessun dato</span>'}
+      </div></div>
+      <div class="card"><b>Esiti</b><div style="margin-top:12px">
+        ${d.perEsito.map(e => `<div class="bar-row"><div class="bar-label">${ESITI_LABEL[e.esito] || e.esito}</div><div class="bar ${e.esito === 'appuntamento_fissato' ? 'g' : ''}" style="width:${(e.n / maxE * 100).toFixed(0)}%"></div><div class="bar-val">${e.n}</div></div>`).join('') || '<span class="muted">Nessun dato</span>'}
+      </div></div>
+      <div class="card"><b>Per operatrice</b>
+        <div class="table-wrap" style="margin-top:10px"><table>
+          <tr><th>Operatrice</th><th>Chiamate</th><th>Ore</th><th>Appuntamenti</th><th>Richiami</th><th>Non interessati</th><th>Conversione</th></tr>
+          ${d.perOperatore.map(o => `<tr><td>${esc(o.nome)}</td><td>${o.chiamate}</td><td>${Math.round((o.sec || 0) / 3600 * 10) / 10}</td><td>${o.appuntamenti}</td><td>${o.richiami}</td><td>${o.non_interessati}</td><td>${o.chiamate ? (100 * o.appuntamenti / o.chiamate).toFixed(1) : 0}%</td></tr>`).join('') || '<tr><td colspan="7" class="muted">Nessun dato</td></tr>'}
+        </table></div></div>
+      <div class="card"><b>Per campagna</b>
+        <div class="table-wrap" style="margin-top:10px"><table>
+          <tr><th>Campagna</th><th>Chiamate</th><th>Appuntamenti</th><th>Conversione</th></tr>
+          ${d.perCampagna.map(c => `<tr><td>${esc(c.campagna)}</td><td>${c.chiamate}</td><td>${c.appuntamenti}</td><td>${c.chiamate ? (100 * c.appuntamenti / c.chiamate).toFixed(1) : 0}%</td></tr>`).join('') || '<tr><td colspan="4" class="muted">Nessun dato</td></tr>'}
+        </table></div></div>`;
+  }
+  ['rp-from', 'rp-to'].forEach(id => $('#' + id).onchange = render);
+  render();
+}
+
+/* ---------- UTENTI ---------- */
+async function viewOperatrici() {
+  const rows = await api('/admin/users');
+  $('#view').innerHTML = `
+    <h2 class="page-title">Gestione <em>Utenti</em></h2>
+    <div class="toolbar"><button class="btn primary" id="u-new">+ Nuovo utente</button></div>
+    <div class="table-wrap"><table>
+      <tr><th>Nome</th><th>Username</th><th>Ruolo</th><th>Stato</th><th>Creato</th><th>Azioni</th></tr>
+      ${rows.map(u => `<tr>
+        <td><b>${esc(u.nome)}</b></td><td>${esc(u.username)}</td>
+        <td><span class="tag ${u.ruolo === 'admin' ? '' : 'green'}">${u.ruolo === 'admin' ? 'Admin' : 'Operatrice'}</span></td>
+        <td>${u.attivo ? '<span class="tag green">attivo</span>' : '<span class="tag red">disattivato</span>'}</td>
+        <td>${fmtDT(u.created_at)}</td>
+        <td style="white-space:nowrap">
+          <button class="btn" data-edit-u="${u.id}">✏️</button>
+          ${u.id !== USER.id ? `<button class="btn ${u.attivo ? 'danger' : 'success'}" data-tog-u="${u.id}|${u.attivo ? 0 : 1}">${u.attivo ? 'Disattiva' : 'Riattiva'}</button>` : ''}
+        </td></tr>`).join('')}
+    </table></div>`;
+  $('#u-new').onclick = () => userForm(null);
+  $('#view').querySelectorAll('[data-edit-u]').forEach(b => b.onclick = () => userForm(rows.find(u => u.id == b.dataset.editU)));
+  $('#view').querySelectorAll('[data-tog-u]').forEach(b => b.onclick = async () => {
+    const [id, attivo] = b.dataset.togU.split('|');
+    await api('/admin/users/' + id, { method: 'PUT', body: { attivo: parseInt(attivo) } });
+    toast('Utente aggiornato'); viewOperatrici();
+  });
+}
+
+function userForm(u) {
+  openModal(u ? 'Modifica utente' : 'Nuovo utente', `
+    <div class="form-grid">
+      <div><label>Nome e cognome *</label><input id="uf-nome" style="width:100%" value="${esc(u?.nome || '')}"></div>
+      <div><label>Username *</label><input id="uf-user" style="width:100%" value="${esc(u?.username || '')}" ${u ? 'disabled' : ''}></div>
+      <div><label>${u ? 'Nuova password (vuoto = invariata)' : 'Password *'}</label><input id="uf-pass" type="password" style="width:100%"></div>
+      <div><label>Ruolo</label><select id="uf-ruolo" style="width:100%">
+        <option value="operatore" ${u?.ruolo !== 'admin' ? 'selected' : ''}>Operatrice</option>
+        <option value="admin" ${u?.ruolo === 'admin' ? 'selected' : ''}>Amministratore</option>
+      </select></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Annulla</button>
+      <button class="btn primary" id="uf-save">💾 Salva</button>
+    </div>`);
+  $('#uf-save').onclick = async () => {
+    try {
+      if (u) {
+        const body = { nome: $('#uf-nome').value, ruolo: $('#uf-ruolo').value };
+        if ($('#uf-pass').value) body.password = $('#uf-pass').value;
+        await api('/admin/users/' + u.id, { method: 'PUT', body });
+      } else {
+        await api('/admin/users', { method: 'POST', body: { nome: $('#uf-nome').value, username: $('#uf-user').value, password: $('#uf-pass').value, ruolo: $('#uf-ruolo').value } });
+      }
+      closeModal(); toast('Utente salvato'); viewOperatrici();
+    } catch (e) { toast(e.message, true); }
+  };
+}
+
+/* ---------- AGENTI ---------- */
+async function viewAgenti() {
+  const rows = await api('/admin/agents');
+  $('#view').innerHTML = `
+    <h2 class="page-title">Agenti sul <em>territorio</em></h2>
+    <div class="toolbar"><button class="btn primary" id="ag-new">+ Nuovo agente</button></div>
+    <div class="table-wrap"><table>
+      <tr><th>Nome</th><th>Telefono</th><th>Zone</th><th>Stato</th><th>Azioni</th></tr>
+      ${rows.map(a => `<tr><td><b>${esc(a.nome)}</b></td><td>${esc(a.telefono || '')}</td><td>${esc(a.zone || '')}</td>
+        <td>${a.attivo ? '<span class="tag green">attivo</span>' : '<span class="tag gray">non attivo</span>'}</td>
+        <td style="white-space:nowrap"><button class="btn" data-edit-ag="${a.id}">✏️</button> <button class="btn danger" data-del-ag="${a.id}">🗑</button></td></tr>`).join('') || '<tr><td colspan="5" class="muted">Nessun agente</td></tr>'}
+    </table></div>`;
+  $('#ag-new').onclick = () => agentForm(null);
+  $('#view').querySelectorAll('[data-edit-ag]').forEach(b => b.onclick = () => agentForm(rows.find(a => a.id == b.dataset.editAg)));
+  $('#view').querySelectorAll('[data-del-ag]').forEach(b => b.onclick = async () => {
+    if (!confirm('Eliminare agente?')) return;
+    await api('/admin/agents/' + b.dataset.delAg, { method: 'DELETE' }); toast('Agente eliminato'); viewAgenti();
+  });
+}
+
+function agentForm(a) {
+  openModal(a ? 'Modifica agente' : 'Nuovo agente', `
+    <label>Nome e cognome *</label><input id="agf-nome" style="width:100%" value="${esc(a?.nome || '')}">
+    <label>Telefono</label><input id="agf-tel" style="width:100%" value="${esc(a?.telefono || '')}">
+    <label>Zone di competenza</label><input id="agf-zone" style="width:100%" value="${esc(a?.zone || '')}">
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Annulla</button>
+      <button class="btn primary" id="agf-save">💾 Salva</button>
+    </div>`);
+  $('#agf-save').onclick = async () => {
+    const body = { nome: $('#agf-nome').value.trim(), telefono: $('#agf-tel').value, zone: $('#agf-zone').value };
+    if (!body.nome) return toast('Nome obbligatorio', true);
+    if (a) await api('/admin/agents/' + a.id, { method: 'PUT', body });
+    else await api('/admin/agents', { method: 'POST', body });
+    closeModal(); toast('Agente salvato'); viewAgenti();
+  };
+}
+
+/* ---------- IMPOSTAZIONI ---------- */
+async function viewImpostazioni() {
+  const [s, tw] = await Promise.all([api('/admin/settings'), api('/twilio/config')]);
+  $('#view').innerHTML = `
+    <h2 class="page-title">Impostazioni <em>Sistema</em></h2>
+    <div class="card">
+      <b>☎️ Telefonia (Twilio)</b>
+      <p style="margin-top:8px">${tw.configured
+        ? `<span class="tag green">configurato</span> Numero in uscita: <b>${esc(tw.caller_id)}</b>`
+        : `<span class="tag red">non configurato</span> Il CRM funziona in <b>modalità manuale</b>: le operatrici chiamano dal proprio telefono e registrano gli esiti.`}</p>
+      <p class="muted" style="margin-top:8px">Per attivare il softphone nel browser, imposta le variabili d'ambiente:
+      <code>TWILIO_ACCOUNT_SID, TWILIO_API_KEY, TWILIO_API_SECRET, TWILIO_TWIML_APP_SID, TWILIO_CALLER_ID</code> e riavvia il server. La TwiML App deve puntare a <code>POST /api/twilio/voice</code>.</p>
+    </div>
+    <div class="card">
+      <b>📝 Note e promemoria</b>
+      <textarea id="set-note" style="margin-top:10px; min-height:120px">${esc(s.note || '')}</textarea>
+      <div style="margin-top:10px"><button class="btn primary" id="set-save">💾 Salva</button></div>
+    </div>
+    <div class="card">
+      <b>🔒 Sicurezza</b>
+      <p class="muted" style="margin-top:8px">Cambia la tua password dalla sezione Utenti. Ricorda di cambiare la password admin predefinita al primo accesso.</p>
+    </div>`;
+  $('#set-save').onclick = async () => { await api('/admin/settings', { method: 'PUT', body: { note: $('#set-note').value } }); toast('Salvato'); };
+}
+
+/* ================================================================
+   POSTAZIONE OPERATRICE
+================================================================ */
+const WS = { // stato postazione
+  device: null, twilioReady: false, connection: null,
+  current: null,       // { tipo, contact, cc_id, callback_id, campaign_id }
+  callId: null, callStart: null, timer: null, mode: 'manuale',
+  selectedCampaign: null, presence: 'idle'
+};
+
+function startHeartbeat() {
+  clearInterval(HEARTBEAT_TIMER);
+  const send = () => api('/op/heartbeat', { method: 'POST', body: {
+    stato: WS.presence,
+    contact: WS.current ? { id: WS.current.contact.id, nome: nomeCompleto(WS.current.contact), telefono: WS.current.contact.telefono } : null,
+    campaign_id: WS.current?.campaign_id || null
+  } }).catch(() => {});
+  send();
+  HEARTBEAT_TIMER = setInterval(send, 10000);
+}
+
+async function initTwilio() {
+  if (WS.device || WS.twilioInit) return;
+  WS.twilioInit = true;
+  try {
+    const cfg = await api('/twilio/config');
+    if (!cfg.configured || typeof Twilio === 'undefined') { WS.mode = 'manuale'; return; }
+    const { token } = await api('/twilio/token');
+    WS.device = new Twilio.Device(token, { logLevel: 'error' });
+    WS.device.on('registered', () => { WS.twilioReady = true; WS.mode = 'twilio'; updateCallUI(); });
+    WS.device.on('error', e => { console.error('Twilio:', e); toast('Errore telefonia: ' + e.message, true); });
+    WS.device.on('tokenWillExpire', async () => {
+      const { token } = await api('/twilio/token');
+      WS.device.updateToken(token);
+    });
+    await WS.device.register();
+  } catch (e) { console.warn('Twilio non disponibile:', e.message); WS.mode = 'manuale'; }
+}
+
+async function viewPostazione() {
+  await initTwilio();
+  const [camps, stats] = await Promise.all([api('/op/campaigns'), api('/op/mystats')]);
+  $('#view').innerHTML = `
+    <h2 class="page-title">Postazione <em>Chiamate</em></h2>
+    <div class="cards-row">
+      <div class="stat-card"><div class="num">${stats.chiamate}</div><div class="lbl">Chiamate oggi</div></div>
+      <div class="stat-card"><div class="num">${stats.appuntamenti || 0}</div><div class="lbl">Appuntamenti oggi</div></div>
+      <div class="stat-card"><div class="num">${stats.richiami || 0}</div><div class="lbl">Richiami presi</div></div>
+      <div class="stat-card"><div class="num">${fmtDur(stats.sec)}</div><div class="lbl">Tempo al telefono</div></div>
+    </div>
+    <div class="workstation">
+      <div>
+        <div class="card contact-card" id="ws-contact">
+          <p class="muted">Seleziona una campagna e premi <b>Prossima chiamata</b></p>
+        </div>
+        <div class="card" id="ws-controls">
+          <div class="toolbar" style="margin-bottom:0">
+            <select id="ws-campaign" style="flex:1">
+              <option value="">— Seleziona campagna —</option>
+              ${camps.map(c => `<option value="${c.id}" ${WS.selectedCampaign == c.id ? 'selected' : ''}>${esc(c.nome)} (${c.da_fare} da fare)</option>`).join('')}
+            </select>
+            <button class="btn primary big" id="ws-next">▶ Prossima chiamata</button>
+          </div>
+          ${camps.length === 0 ? '<p class="muted" style="margin-top:10px">Nessuna campagna attiva con contatti per te. Chiedi all\'amministratore.</p>' : ''}
+        </div>
+      </div>
+      <div>
+        <div class="card" id="ws-esito-card">
+          <b>Esito chiamata</b>
+          <p class="muted" id="ws-esito-hint" style="margin:6px 0 10px">Disponibile dopo la chiamata</p>
+          <div id="ws-esito-body"></div>
+        </div>
+      </div>
+    </div>`;
+  $('#ws-campaign').onchange = e => WS.selectedCampaign = e.target.value || null;
+  $('#ws-next').onclick = nextContact;
+  if (WS.current) renderContact(); // ripristina se si torna sulla vista
+}
+
+async function nextContact() {
+  if (WS.callId) return toast('Chiudi prima la chiamata in corso', true);
+  try {
+    const r = await api('/op/next', { method: 'POST', body: { campaign_id: WS.selectedCampaign ? parseInt(WS.selectedCampaign) : null } });
+    if (r.tipo === 'vuoto') { toast(r.motivo, true); return; }
+    WS.current = r;
+    WS.presence = 'idle';
+    renderContact();
+  } catch (e) { toast(e.message, true); }
+}
+
+function renderContact() {
+  const c = WS.current.contact;
+  const isRichiamo = WS.current.tipo === 'richiamo';
+  $('#ws-contact').innerHTML = `
+    ${isRichiamo ? `<div class="tag orange" style="margin-bottom:8px">🔄 RICHIAMO ${fmtDT(WS.current.richiamo_at)} ${esc(WS.current.richiamo_note || '')}</div>` : ''}
+    <div class="cname">${esc(nomeCompleto(c))}</div>
+    <div class="contact-meta">
+      ${c.comune ? `<span class="tag">📍 ${esc(c.comune)}</span>` : ''}
+      ${c.offerto_da ? `<span class="tag gray">🤝 ${esc(c.offerto_da)}</span>` : ''}
+      ${c.parentela ? `<span class="tag gray">👥 ${esc(c.parentela)}</span>` : ''}
+      ${WS.current.tentativi ? `<span class="tag gray">tent. ${WS.current.tentativi}</span>` : ''}
+    </div>
+    <div class="cphone">${esc(c.telefono)}</div>
+    ${c.note ? `<p class="muted">📝 ${esc(c.note)}</p>` : ''}
+    <div class="call-status" id="ws-status"></div>
+    <div class="call-timer hidden" id="ws-timer">00:00</div>
+    <div class="call-buttons" id="ws-buttons"></div>`;
+  updateCallUI();
+}
+
+function updateCallUI() {
+  const btns = $('#ws-buttons');
+  if (!btns || !WS.current) return;
+  const status = $('#ws-status');
+  if (WS.callId) {
+    status.innerHTML = WS.mode === 'twilio' ? '🔴 <b>In chiamata (softphone)</b>' : '📱 <b>In chiamata (dal tuo telefono)</b>';
+    $('#ws-timer').classList.remove('hidden');
+    btns.innerHTML = `<button class="btn danger big" id="ws-hangup">📵 Chiudi chiamata</button>`;
+    $('#ws-hangup').onclick = hangup;
+  } else {
+    status.innerHTML = WS.twilioReady ? '<span class="tag green">softphone pronto</span>' : '<span class="tag gray">modalità manuale — chiama dal tuo telefono</span>';
+    $('#ws-timer').classList.add('hidden');
+    btns.innerHTML = `
+      <button class="btn success big" id="ws-call">📞 ${WS.twilioReady ? 'Chiama' : 'Ho chiamato / sto chiamando'}</button>
+      <button class="btn" id="ws-skip">⏭ Salta</button>`;
+    $('#ws-call').onclick = startCall;
+    $('#ws-skip').onclick = skipContact;
+  }
+}
+
+async function skipContact() {
+  if (WS.current?.cc_id) await api('/op/skip', { method: 'POST', body: { cc_id: WS.current.cc_id } });
+  WS.current = null;
+  $('#ws-contact').innerHTML = '<p class="muted">Contatto saltato. Premi <b>Prossima chiamata</b></p>';
+  clearEsito();
+}
+
+async function startCall() {
+  const c = WS.current.contact;
+  try {
+    const r = await api('/op/calls/start', { method: 'POST', body: { contact_id: c.id, campaign_id: WS.current.campaign_id, mode: WS.twilioReady ? 'twilio' : 'manuale' } });
+    WS.callId = r.call_id;
+    WS.callStart = Date.now();
+    WS.presence = 'in_chiamata';
+    WS.timer = setInterval(() => {
+      const s = Math.floor((Date.now() - WS.callStart) / 1000);
+      const t = $('#ws-timer');
+      if (t) t.textContent = `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+    }, 1000);
+
+    if (WS.twilioReady) {
+      WS.connection = await WS.device.connect({ params: { To: c.telefono } });
+      WS.connection.on('disconnect', () => { if (WS.callId) onCallEnded(); });
+      WS.connection.on('error', e => toast('Errore chiamata: ' + e.message, true));
+    }
+    updateCallUI();
+    renderEsitoForm(); // esito compilabile già durante la chiamata
+  } catch (e) { toast(e.message, true); }
+}
+
+function hangup() {
+  if (WS.connection) { try { WS.connection.disconnect(); } catch {} WS.connection = null; }
+  onCallEnded();
+}
+
+function onCallEnded() {
+  clearInterval(WS.timer);
+  WS.presence = 'in_esito';
+  WS.durata = Math.floor((Date.now() - WS.callStart) / 1000);
+  WS.connection = null;
+  const status = $('#ws-status');
+  if (status) status.innerHTML = '☑️ Chiamata terminata — <b>registra l\'esito</b>';
+  const btns = $('#ws-buttons');
+  if (btns) btns.innerHTML = '';
+  toast('Chiamata terminata: seleziona l\'esito');
+}
+
+function clearEsito() {
+  $('#ws-esito-body').innerHTML = '';
+  $('#ws-esito-hint').classList.remove('hidden');
+}
+
+function renderEsitoForm() {
+  $('#ws-esito-hint').classList.add('hidden');
+  const domani = new Date(Date.now() + 864e5).toISOString().slice(0, 10);
+  api('/op/agents').then(agents => {
+    $('#ws-esito-body').innerHTML = `
+      <div class="esiti-grid">
+        ${ESITI_CHIAMATA.map(e => `<button class="esito-btn" data-esito="${e}">${ESITI_LABEL[e]}</button>`).join('')}
+      </div>
+      <div id="ws-extra" style="margin-top:12px"></div>
+      <label>Note chiamata</label><textarea id="ws-note"></textarea>
+      <button class="btn primary big block" style="margin-top:12px" id="ws-save-esito" disabled>💾 Salva esito</button>`;
+
+    let esito = null;
+    $('#ws-esito-body').querySelectorAll('.esito-btn').forEach(b => b.onclick = () => {
+      $('#ws-esito-body').querySelectorAll('.esito-btn').forEach(x => x.classList.remove('selected'));
+      b.classList.add('selected');
+      esito = b.dataset.esito;
+      $('#ws-save-esito').disabled = false;
+      const extra = $('#ws-extra');
+      if (esito === 'richiamo') {
+        const dt = new Date(Date.now() + 3600e3);
+        const val = `${dt.toISOString().slice(0, 10)}T${String(dt.getHours()).padStart(2, '0')}:00`;
+        extra.innerHTML = `<label>📅 Quando richiamare *</label><input type="datetime-local" id="ws-cb-dt" value="${val}" style="width:100%">
+          <label>Note richiamo</label><input id="ws-cb-note" style="width:100%" placeholder="es. preferisce il pomeriggio">`;
+      } else if (esito === 'appuntamento_fissato') {
+        extra.innerHTML = `
+          <div class="form-grid">
+            <div><label>📅 Data appuntamento *</label><input type="date" id="ws-ap-data" value="${domani}" style="width:100%"></div>
+            <div><label>Ora</label><input type="time" id="ws-ap-ora" style="width:100%"></div>
+            <div class="full"><label>Indirizzo</label><input id="ws-ap-ind" style="width:100%"></div>
+            <div class="full"><label>Agente</label><select id="ws-ap-agente" style="width:100%"><option value="">— da assegnare —</option>${agents.map(a => `<option value="${a.id}">${esc(a.nome)}${a.zone ? ' (' + esc(a.zone) + ')' : ''}</option>`).join('')}</select></div>
+          </div>`;
+      } else extra.innerHTML = '';
+    });
+
+    $('#ws-save-esito').onclick = async () => {
+      if (!esito) return;
+      // se la chiamata è ancora aperta chiudila
+      if (WS.connection) { try { WS.connection.disconnect(); } catch {} WS.connection = null; clearInterval(WS.timer); }
+      const durata = WS.durata ?? Math.floor((Date.now() - WS.callStart) / 1000);
+      const body = {
+        esito, note: $('#ws-note').value, durata,
+        cc_id: WS.current.cc_id || null, callback_id: WS.current.callback_id || null
+      };
+      if (esito === 'richiamo') {
+        body.richiamo_at = $('#ws-cb-dt')?.value;
+        body.richiamo_note = $('#ws-cb-note')?.value;
+        if (!body.richiamo_at) return toast('Imposta data e ora del richiamo', true);
+      }
+      if (esito === 'appuntamento_fissato') {
+        body.appuntamento = { data: $('#ws-ap-data')?.value, ora: $('#ws-ap-ora')?.value, indirizzo: $('#ws-ap-ind')?.value, agent_id: $('#ws-ap-agente')?.value ? parseInt($('#ws-ap-agente').value) : null };
+        if (!body.appuntamento.data) return toast('Imposta la data dell\'appuntamento', true);
+      }
+      try {
+        await api(`/op/calls/${WS.callId}/end`, { method: 'POST', body });
+        WS.callId = null; WS.callStart = null; WS.durata = null; WS.current = null; WS.presence = 'idle';
+        toast('Esito salvato ✓');
+        viewPostazione();
+      } catch (e) { toast(e.message, true); }
+    };
+  });
+}
+
+/* ---------- viste secondarie operatrice ---------- */
+async function viewRichiamiOp() {
+  const rows = await api('/op/callbacks');
+  const scaduto = r => new Date(r.richiamo_at.replace(' ', 'T')) <= new Date();
+  $('#view').innerHTML = `
+    <h2 class="page-title">I miei <em>Richiami</em></h2>
+    <p class="muted" style="margin-bottom:12px">I richiami scaduti ti vengono proposti automaticamente in Postazione con "Prossima chiamata".</p>
+    <div class="table-wrap"><table>
+      <tr><th>Da richiamare</th><th>Contatto</th><th>Telefono</th><th>Campagna</th><th>Note</th></tr>
+      ${rows.map(r => `<tr>
+        <td>${scaduto(r) ? `<span class="tag red">${fmtDT(r.richiamo_at)}</span>` : fmtDT(r.richiamo_at)}</td>
+        <td>${esc((r.contatto_nome || '') + ' ' + (r.contatto_cognome || ''))}</td>
+        <td>${esc(r.telefono)}</td><td>${esc(r.campagna || '—')}</td><td>${esc(r.note || '')}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">Nessun richiamo</td></tr>'}
+    </table></div>`;
+}
+
+async function viewChiamateOp() {
+  const rows = await api('/op/calls');
+  $('#view').innerHTML = `
+    <h2 class="page-title">Le mie <em>Chiamate</em></h2>
+    <div class="table-wrap"><table>
+      <tr><th>Data e ora</th><th>Contatto</th><th>Numero</th><th>Campagna</th><th>Durata</th><th>Esito</th><th>Note</th></tr>
+      ${rows.map(c => `<tr><td>${fmtDT(c.started_at)}</td>
+        <td>${esc((c.contatto_nome || '') + ' ' + (c.contatto_cognome || ''))}</td>
+        <td>${esc(c.contatto_telefono)}</td><td>${esc(c.campagna || '—')}</td>
+        <td>${fmtDur(c.durata)}</td><td>${tag(c.esito)}</td><td>${esc(c.note || '')}</td></tr>`).join('') || '<tr><td colspan="7" class="muted">Nessuna chiamata</td></tr>'}
+    </table></div>`;
+}
+
+async function viewAppuntamentiOp() {
+  const rows = await api('/op/appointments');
+  $('#view').innerHTML = `
+    <h2 class="page-title">I miei <em>Appuntamenti</em></h2>
+    <div class="table-wrap"><table>
+      <tr><th>Data</th><th>Ora</th><th>Contatto</th><th>Telefono</th><th>Agente</th><th>Indirizzo</th><th>Stato</th></tr>
+      ${rows.map(a => `<tr><td>${fmtD(a.data)}</td><td>${a.ora || '—'}</td>
+        <td>${esc((a.contatto_nome || '') + ' ' + (a.contatto_cognome || ''))}</td><td>${esc(a.telefono || '')}</td>
+        <td>${esc(a.agente || '—')}</td><td>${esc(a.indirizzo || '')}</td>
+        <td><span class="tag ${a.stato === 'confermato' ? 'green' : a.stato === 'annullato' ? 'red' : ''}">${a.stato}</span></td></tr>`).join('') || '<tr><td colspan="7" class="muted">Nessun appuntamento</td></tr>'}
+    </table></div>`;
+}
+
+/* ---------- registry ---------- */
+const VIEWS = {
+  dashboard: viewDashboard, monitor: viewMonitor, campagne: viewCampagne, contatti: viewContatti,
+  registro: viewRegistro, richiami: viewRichiami, appuntamenti: viewAppuntamenti, report: viewReport,
+  operatrici: viewOperatrici, agenti: viewAgenti, impostazioni: viewImpostazioni,
+  postazione: viewPostazione, 'richiami-op': viewRichiamiOp, 'chiamate-op': viewChiamateOp, 'appuntamenti-op': viewAppuntamentiOp
+};
+
+boot();

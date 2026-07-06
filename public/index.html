@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CRM Telefoniste</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+  <!-- LOGIN -->
+  <div id="login-screen" class="login-screen hidden">
+    <div class="login-box">
+      <h1>CRM <em>Telefoniste</em></h1>
+      <p class="muted">Accedi con le tue credenziali</p>
+      <form id="login-form">
+        <input type="text" id="login-username" placeholder="Username" autocomplete="username" required>
+        <input type="password" id="login-password" placeholder="Password" autocomplete="current-password" required>
+        <button type="submit" class="btn primary block">Accedi</button>
+        <div id="login-error" class="error hidden"></div>
+      </form>
+    </div>
+  </div>
+
+  <!-- APP -->
+  <div id="app" class="app hidden">
+    <aside class="sidebar">
+      <div class="brand">CRM <em>Telefoniste</em></div>
+      <div class="user-badge">
+        <span id="user-name">—</span>
+        <span id="user-role" class="pill">—</span>
+      </div>
+      <nav id="nav"></nav>
+      <div class="sidebar-footer">
+        <button id="logout-btn" class="btn ghost block">🔓 Esci</button>
+      </div>
+    </aside>
+    <main class="main">
+      <div id="view"></div>
+    </main>
+  </div>
+
+  <!-- MODALE GENERICA -->
+  <div id="modal" class="modal-backdrop hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="modal-title"></h3>
+        <button class="modal-close" onclick="closeModal()">✕</button>
+      </div>
+      <div id="modal-body" class="modal-body"></div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="https://sdk.twilio.com/js/voice/releases/2.11.0/twilio.min.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
