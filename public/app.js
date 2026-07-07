@@ -467,9 +467,41 @@ async function contactDetail(id) {
     <div class="modal-actions"><button class="btn" onclick="closeModal()">Chiudi</button></div>`);
 }
 
+function parseCsvText(text) {
+  const firstLine = text.slice(0, text.indexOf('\n') > -1 ? text.indexOf('\n') : text.length);
+  const sep = (firstLine.match(/;/g) || []).length >= (firstLine.match(/,/g) || []).length && firstLine.includes(';') ? ';' : ',';
+  const out = []; let row = [], cur = '', inQ = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQ) {
+      if (c === '"') { if (text[i + 1] === '"') { cur += '"'; i++; } else inQ = false; }
+      else cur += c;
+    } else if (c === '"') inQ = true;
+    else if (c === sep) { row.push(cur); cur = ''; }
+    else if (c === '\n' || c === '\r') {
+      if (c === '\r' && text[i + 1] === '\n') i++;
+      row.push(cur); cur = '';
+      if (row.some(v => v.trim() !== '')) out.push(row);
+      row = [];
+    } else cur += c;
+  }
+  if (cur !== '' || row.length) { row.push(cur); if (row.some(v => v.trim() !== '')) out.push(row); }
+  return out;
+}
+
+// sinonimi di intestazione riconosciuti (in ordine di priorita')
+const CSV_HEADER_MAP = {
+  nome: ['nome', 'nome anagrafica', 'first name', 'name'],
+  cognome: ['cognome', 'cognome anagrafica', 'last name'],
+  telefono: ['telefono', 'telefono fisso anagrafica', 'cellulare', 'telefono mobile anagrafica', 'altro telefono anagrafica', 'tel', 'phone', 'numero'],
+  comune: ['comune', 'comune codice istat anagrafica', 'città', 'citta', 'city'],
+  offerto_da: ['offerto_da', 'offerto da'],
+  parentela: ['parentela', 'grado parentela']
+};
+
 function importCsv(onDone) {
   openModal('Importa contatti CSV', `
-    <p class="muted">Colonne: <b>nome, cognome, telefono, comune, offerto_da, parentela</b> (prima riga = intestazione, separatore , o ;)</p>
+    <p class="muted">Riconosco automaticamente separatore (, o ;) e intestazioni come <b>nome, cognome, telefono, comune, offerto_da, parentela</b> — anche nei formati dei gestionali (es. "Nome Anagrafica", "Telefono Fisso Anagrafica", "Cellulare").</p>
     <input type="file" id="csv-file" accept=".csv,text/csv" style="margin:14px 0; width:100%">
     <div id="csv-preview"></div>
     <div class="modal-actions">
@@ -481,14 +513,33 @@ function importCsv(onDone) {
     const f = e.target.files[0]; if (!f) return;
     const reader = new FileReader();
     reader.onload = () => {
-      const sep = reader.result.includes(';') && !reader.result.split('\n')[0].includes(',') ? ';' : ',';
-      const lines = reader.result.split(/\r?\n/).filter(l => l.trim());
-      const head = lines[0].toLowerCase().split(sep).map(h => h.trim().replace(/"/g, ''));
-      rows = lines.slice(1).map(l => {
-        const vals = l.split(sep).map(v => v.trim().replace(/^"|"$/g, ''));
-        const o = {}; head.forEach((h, i) => o[h] = vals[i] || ''); return o;
-      });
-      $('#csv-preview').innerHTML = `<p><b>${rows.length}</b> righe trovate. Anteprima:</p>
+      const table = parseCsvText(reader.result);
+      if (table.length < 2) { $('#csv-preview').innerHTML = '<p class="error">File vuoto o non leggibile.</p>'; return; }
+      const head = table[0].map(h => h.trim().toLowerCase());
+      // mappa campo -> lista di indici colonna (in ordine di priorita')
+      const colIdx = {};
+      for (const [field, names] of Object.entries(CSV_HEADER_MAP)) {
+        colIdx[field] = [];
+        for (const n of names) head.forEach((h, i) => { if (h === n) colIdx[field].push(i); });
+      }
+      if (!colIdx.telefono.length || (!colIdx.nome.length && !colIdx.cognome.length)) {
+        $('#csv-preview').innerHTML = `<p class="error">⚠ Non trovo le colonne nome/telefono. Intestazioni presenti nel file:<br><span class="muted">${head.filter(Boolean).slice(0, 20).map(esc).join(' · ')}...</span></p>`;
+        $('#csv-go').disabled = true;
+        return;
+      }
+      const pick = (r, field) => {
+        for (const i of colIdx[field]) { const v = (r[i] || '').trim(); if (v) return v; }
+        return '';
+      };
+      rows = [];
+      let scartate = 0;
+      for (const r of table.slice(1)) {
+        const nome = pick(r, 'nome'), cognome = pick(r, 'cognome');
+        let tel = pick(r, 'telefono').replace(/[^+0-9]/g, '');
+        if (!tel || (!nome && !cognome)) { scartate++; continue; }
+        rows.push({ nome: nome || cognome, cognome: nome ? cognome : '', telefono: tel, comune: pick(r, 'comune'), offerto_da: pick(r, 'offerto_da'), parentela: pick(r, 'parentela') });
+      }
+      $('#csv-preview').innerHTML = `<p><b>${rows.length}</b> contatti pronti${scartate ? ` (<b>${scartate}</b> righe scartate: senza telefono o nome)` : ''}. Anteprima:</p>
         <div class="table-wrap" style="max-height:180px"><table>
         <tr><th>Nome</th><th>Cognome</th><th>Telefono</th><th>Comune</th></tr>
         ${rows.slice(0, 8).map(r => `<tr><td>${esc(r.nome)}</td><td>${esc(r.cognome)}</td><td>${esc(r.telefono)}</td><td>${esc(r.comune)}</td></tr>`).join('')}
@@ -498,8 +549,9 @@ function importCsv(onDone) {
     reader.readAsText(f);
   };
   $('#csv-go').onclick = async () => {
+    $('#csv-go').disabled = true;
     const r = await api('/contacts/import', { method: 'POST', body: { rows } });
-    closeModal(); toast(`Importati ${r.inseriti} contatti (${r.saltati} saltati)`); onDone && onDone();
+    closeModal(); toast(`Importati ${r.inseriti} contatti (${r.saltati} già presenti o scartati)`); onDone && onDone();
   };
 }
 
