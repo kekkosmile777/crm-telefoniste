@@ -116,6 +116,7 @@ const NAV_ADMIN = [
 const NAV_OP = [
   { sect: 'Lavoro' },
   { id: 'postazione', icon: '☎️', label: 'Postazione' },
+  { id: 'campagne-op', icon: '🚀', label: 'Campagne' },
   { id: 'telefono', icon: '🔢', label: 'Telefono' },
   { id: 'richiami-op', icon: '🔄', label: 'I miei richiami' },
   { id: 'chiamate-op', icon: '📞', label: 'Le mie chiamate' },
@@ -1376,12 +1377,46 @@ async function viewTelefono() {
   };
 }
 
+/* ---------- CAMPAGNE (lato operatrice) ---------- */
+async function viewCampagneOp() {
+  const camps = await api('/op/campaigns?all=1');
+  WS.campsCache = camps;
+  const tipoTag = c => ({ manuale: '<span class="tag gray">Manuale</span>',
+    predictive: '<span class="tag orange">\u26A1 Predictive</span>',
+    geo: `<span class="tag green">\uD83D\uDCCD Geo ${c.raggio_km || 25} km</span>` }[c.tipo] || '');
+  $('#view').innerHTML = `
+    <h2 class="page-title">Le mie <em>Campagne</em></h2>
+    ${camps.length === 0 ? '<p class="muted">Nessuna campagna attiva al momento. Chiedi all\'amministratore.</p>' : ''}
+    <div class="monitor-grid">
+      ${camps.map(c => {
+        const pct = c.tot ? Math.round(100 * c.fatti_tot / c.tot) : 0;
+        return `<div class="op-card">
+          <b>${esc(c.nome)}</b> ${tipoTag(c)}
+          ${c.descrizione ? `<div class="muted" style="margin-top:4px">${esc(c.descrizione)}</div>` : ''}
+          ${c.note ? `<div style="margin-top:6px; font-size:13px">\uD83D\uDCDD ${esc(c.note)}</div>` : ''}
+          <div style="margin:10px 0 4px; font-size:13px">
+            Da chiamare${c.modalita === 'assegnata' ? ' (assegnati a te)' : ''}: <b>${c.da_fare}</b><br>
+            Fatte da te: <b>${c.miei_fatti}</b> · Avanzamento totale: <b>${pct}%</b> (${c.fatti_tot}/${c.tot})
+          </div>
+          <div style="background:#efeef4; border-radius:6px; height:8px; margin:6px 0 12px"><div style="background:var(--accent); height:8px; border-radius:6px; width:${pct}%"></div></div>
+          ${c.modalita === 'assegnata' && !c.assegnati_a_me ? '<p class="muted" style="font-size:12px">Nessun contatto assegnato a te in questa campagna.</p>'
+            : `<button class="btn primary block" data-work="${c.id}">▶ Lavora questa campagna</button>`}
+        </div>`;
+      }).join('')}
+    </div>`;
+  $('#view').querySelectorAll('[data-work]').forEach(b => b.onclick = () => {
+    WS.selectedCampaign = b.dataset.work;
+    if (!WS.geoCenter || WS.geoCenter.campaign != WS.selectedCampaign) WS.geoCenter = null;
+    go('postazione');
+  });
+}
+
 /* ---------- registry ---------- */
 const VIEWS = {
   dashboard: viewDashboard, monitor: viewMonitor, campagne: viewCampagne, contatti: viewContatti,
   registro: viewRegistro, richiami: viewRichiami, appuntamenti: viewAppuntamenti, report: viewReport,
   operatrici: viewOperatrici, agenti: viewAgenti, impostazioni: viewImpostazioni,
-  postazione: viewPostazione, telefono: viewTelefono, 'richiami-op': viewRichiamiOp, 'chiamate-op': viewChiamateOp, 'appuntamenti-op': viewAppuntamentiOp
+  postazione: viewPostazione, 'campagne-op': viewCampagneOp, telefono: viewTelefono, 'richiami-op': viewRichiamiOp, 'chiamate-op': viewChiamateOp, 'appuntamenti-op': viewAppuntamentiOp
 };
 
 boot();

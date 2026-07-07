@@ -16,12 +16,16 @@ function releaseStaleLocks() {
 router.get('/campaigns', (req, res) => {
   releaseStaleLocks();
   const rows = db.prepare(`
-    SELECT c.id, c.nome, c.descrizione, c.modalita, c.tipo, c.raggio_km,
+    SELECT c.id, c.nome, c.descrizione, c.note, c.modalita, c.tipo, c.raggio_km,
       (SELECT COUNT(*) FROM campaign_contacts cc WHERE cc.campaign_id=c.id AND cc.stato='da_chiamare'
         AND (c.modalita='coda' OR cc.assigned_to = @uid)) AS da_fare,
       (SELECT COUNT(*) FROM campaign_contacts cc WHERE cc.campaign_id=c.id AND cc.stato='lavorato'
-        AND cc.lavorato_da = @uid) AS miei_fatti
+        AND cc.lavorato_da = @uid) AS miei_fatti,
+      (SELECT COUNT(*) FROM campaign_contacts cc WHERE cc.campaign_id=c.id AND cc.assigned_to = @uid) AS assegnati_a_me,
+      (SELECT COUNT(*) FROM campaign_contacts cc WHERE cc.campaign_id=c.id AND cc.stato='lavorato') AS fatti_tot,
+      (SELECT COUNT(*) FROM campaign_contacts cc WHERE cc.campaign_id=c.id) AS tot
     FROM campaigns c WHERE c.stato='attiva' ORDER BY c.id DESC`).all({ uid: req.user.id });
+  if (req.query.all === '1') return res.json(rows);
   res.json(rows.filter(r => r.da_fare > 0 || r.miei_fatti > 0));
 });
 
