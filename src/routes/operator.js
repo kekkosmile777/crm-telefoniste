@@ -16,7 +16,7 @@ function releaseStaleLocks() {
 router.get('/campaigns', (req, res) => {
   releaseStaleLocks();
   const rows = db.prepare(`
-    SELECT c.id, c.nome, c.descrizione, c.modalita,
+    SELECT c.id, c.nome, c.descrizione, c.modalita, c.tipo, c.raggio_km,
       (SELECT COUNT(*) FROM campaign_contacts cc WHERE cc.campaign_id=c.id AND cc.stato='da_chiamare'
         AND (c.modalita='coda' OR cc.assigned_to = @uid)) AS da_fare,
       (SELECT COUNT(*) FROM campaign_contacts cc WHERE cc.campaign_id=c.id AND cc.stato='lavorato'
@@ -52,25 +52,60 @@ router.post('/next', (req, res) => {
   const camp = db.prepare("SELECT * FROM campaigns WHERE id=? AND stato='attiva'").get(campaignId);
   if (!camp) return res.status(400).json({ error: 'Campagna non attiva' });
 
-  // 2. Prossimo contatto della campagna (transazione atomica)
+  // 2. Campagna geolocalizzata: serve una posizione di partenza
+  const { lat, lng } = req.body;
+  if (camp.tipo === 'geo' && (lat == null || lng == null)) {
+    return res.json({ tipo: 'geo_select', motivo: 'Scegli una posizione sulla mappa per iniziare.' });
+  }
+
+  // 3. Prossimo contatto della campagna (transazione atomica)
   const tx = db.transaction(() => {
     const cond = camp.modalita === 'assegnata' ? 'AND cc.assigned_to = ?' : "AND (cc.assigned_to IS NULL OR cc.assigned_to = ?)";
-    const row = db.prepare(`
-      SELECT cc.id AS cc_id, cc.tentativi, ct.*
-      FROM campaign_contacts cc JOIN contacts ct ON ct.id = cc.contact_id
-      WHERE cc.campaign_id = ? AND cc.stato = 'da_chiamare' ${cond}
-      ORDER BY cc.tentativi, cc.id LIMIT 1`).get(campaignId, req.user.id);
+    let row;
+    if (camp.tipo === 'geo') {
+      row = db.prepare(`
+        SELECT cc.id AS cc_id, cc.tentativi, ct.*, dist_km(@lat, @lng, ct.lat, ct.lng) AS dist
+        FROM campaign_contacts cc JOIN contacts ct ON ct.id = cc.contact_id
+        WHERE cc.campaign_id = @cid AND cc.stato = 'da_chiamare' ${cond.replace('?', '@uid')}
+          AND ct.lat IS NOT NULL AND dist_km(@lat, @lng, ct.lat, ct.lng) <= @raggio
+        ORDER BY dist, cc.tentativi LIMIT 1`)
+        .get({ lat, lng, cid: campaignId, uid: req.user.id, raggio: camp.raggio_km || 25 });
+    } else {
+      row = db.prepare(`
+        SELECT cc.id AS cc_id, cc.tentativi, ct.*
+        FROM campaign_contacts cc JOIN contacts ct ON ct.id = cc.contact_id
+        WHERE cc.campaign_id = ? AND cc.stato = 'da_chiamare' ${cond}
+        ORDER BY cc.tentativi, cc.id LIMIT 1`).get(campaignId, req.user.id);
+    }
     if (!row) return null;
     db.prepare("UPDATE campaign_contacts SET stato='in_chiamata', locked_by=?, locked_at=datetime('now') WHERE id=?").run(uid, row.cc_id);
     return row;
   });
   const row = tx();
-  if (!row) return res.json({ tipo: 'vuoto', motivo: 'Nessun contatto da chiamare in questa campagna.' });
+  if (!row) {
+    if (camp.tipo === 'geo') return res.json({ tipo: 'geo_esaurita', motivo: `Zona esaurita (raggio ${camp.raggio_km || 25} km): scegli un'altra posizione sulla mappa.` });
+    return res.json({ tipo: 'vuoto', motivo: 'Nessun contatto da chiamare in questa campagna.' });
+  }
 
   res.json({
     tipo: 'campagna', cc_id: row.cc_id, campaign_id: parseInt(campaignId), tentativi: row.tentativi,
+    dist_km: row.dist != null ? Math.round(row.dist * 10) / 10 : null,
     contact: { id: row.id, nome: row.nome, cognome: row.cognome, telefono: row.telefono, comune: row.comune, offerto_da: row.offerto_da, parentela: row.parentela, note: row.note, esito: row.esito }
   });
+});
+
+/* Punti mappa per campagna geolocalizzata */
+router.get('/campaigns/:id/geo-points', (req, res) => {
+  releaseStaleLocks();
+  const points = db.prepare(`
+    SELECT ct.id, ct.nome, ct.cognome, ct.comune, ct.lat, ct.lng
+    FROM campaign_contacts cc JOIN contacts ct ON ct.id = cc.contact_id
+    WHERE cc.campaign_id = ? AND cc.stato = 'da_chiamare' AND ct.lat IS NOT NULL AND ct.lng IS NOT NULL
+    LIMIT 5000`).all(req.params.id);
+  const senza = db.prepare(`
+    SELECT COUNT(*) n FROM campaign_contacts cc JOIN contacts ct ON ct.id = cc.contact_id
+    WHERE cc.campaign_id = ? AND cc.stato = 'da_chiamare' AND (ct.lat IS NULL OR ct.lng IS NULL)`).get(req.params.id).n;
+  res.json({ points, senza_posizione: senza });
 });
 
 /* Salta il contatto corrente (lo rimette in coda) */

@@ -67,24 +67,27 @@ router.get('/campaigns', (req, res) => {
 });
 
 router.post('/campaigns', (req, res) => {
-  const { nome, descrizione, note, modalita, obiettivo_app, max_tentativi } = req.body;
+  const { nome, descrizione, note, modalita, obiettivo_app, max_tentativi, tipo, raggio_km } = req.body;
   if (!nome) return res.status(400).json({ error: 'Nome obbligatorio' });
-  const r = db.prepare('INSERT INTO campaigns (nome, descrizione, note, modalita, obiettivo_app, max_tentativi) VALUES (?,?,?,?,?,?)')
-    .run(nome, descrizione || '', note || '', modalita === 'assegnata' ? 'assegnata' : 'coda', parseInt(obiettivo_app) || 0, parseInt(max_tentativi) || 3);
+  const tipoOk = ['manuale', 'predictive', 'geo'].includes(tipo) ? tipo : 'manuale';
+  const r = db.prepare('INSERT INTO campaigns (nome, descrizione, note, modalita, obiettivo_app, max_tentativi, tipo, raggio_km) VALUES (?,?,?,?,?,?,?,?)')
+    .run(nome, descrizione || '', note || '', modalita === 'assegnata' ? 'assegnata' : 'coda', parseInt(obiettivo_app) || 0, parseInt(max_tentativi) || 3, tipoOk, parseInt(raggio_km) || 25);
   res.json({ id: r.lastInsertRowid });
 });
 
 router.put('/campaigns/:id', (req, res) => {
   const c = db.prepare('SELECT * FROM campaigns WHERE id=?').get(req.params.id);
   if (!c) return res.status(404).json({ error: 'Campagna non trovata' });
-  const { nome, descrizione, note, modalita, obiettivo_app, max_tentativi, stato } = req.body;
+  const { nome, descrizione, note, modalita, obiettivo_app, max_tentativi, stato, tipo, raggio_km } = req.body;
   const stati = ['bozza','attiva','in_pausa','completata','archiviata'];
-  db.prepare('UPDATE campaigns SET nome=?, descrizione=?, note=?, modalita=?, obiettivo_app=?, max_tentativi=?, stato=? WHERE id=?')
+  db.prepare('UPDATE campaigns SET nome=?, descrizione=?, note=?, modalita=?, obiettivo_app=?, max_tentativi=?, stato=?, tipo=?, raggio_km=? WHERE id=?')
     .run(nome ?? c.nome, descrizione ?? c.descrizione, note ?? c.note,
          ['coda','assegnata'].includes(modalita) ? modalita : c.modalita,
          obiettivo_app != null ? parseInt(obiettivo_app) || 0 : c.obiettivo_app,
          max_tentativi != null ? parseInt(max_tentativi) || 3 : c.max_tentativi,
-         stati.includes(stato) ? stato : c.stato, req.params.id);
+         stati.includes(stato) ? stato : c.stato,
+         ['manuale','predictive','geo'].includes(tipo) ? tipo : c.tipo,
+         raggio_km != null ? parseInt(raggio_km) || 25 : c.raggio_km, req.params.id);
   res.json({ ok: true });
 });
 

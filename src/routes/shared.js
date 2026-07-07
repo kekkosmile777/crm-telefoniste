@@ -75,17 +75,31 @@ router.post('/contacts/import', requireAdmin, (req, res) => {
   if (!Array.isArray(rows)) return res.status(400).json({ error: 'rows mancante' });
   let inseriti = 0, saltati = 0;
   const exists = db.prepare('SELECT id FROM contacts WHERE telefono = ?');
-  const ins = db.prepare(`INSERT INTO contacts (nome, cognome, telefono, comune, offerto_da, parentela) VALUES (?,?,?,?,?,?)`);
+  const ins = db.prepare(`INSERT INTO contacts (nome, cognome, telefono, comune, offerto_da, parentela, lat, lng) VALUES (?,?,?,?,?,?,?,?)`);
+  const num = v => { const f = parseFloat(String(v || '').replace(',', '.')); return isFinite(f) && f !== 0 ? f : null; };
   const tx = db.transaction(() => {
     for (const r of rows) {
       if (!r.nome || !r.telefono) { saltati++; continue; }
       if (exists.get(String(r.telefono).trim())) { saltati++; continue; }
-      ins.run(r.nome.trim(), (r.cognome || '').trim(), String(r.telefono).trim(), (r.comune || '').trim(), (r.offerto_da || '').trim(), (r.parentela || '').trim());
+      ins.run(r.nome.trim(), (r.cognome || '').trim(), String(r.telefono).trim(), (r.comune || '').trim(), (r.offerto_da || '').trim(), (r.parentela || '').trim(), num(r.lat), num(r.lng));
       inseriti++;
     }
   });
   tx();
   res.json({ ok: true, inseriti, saltati });
+});
+
+// Aggiorna coordinate in blocco (admin) - match per telefono
+router.post('/contacts/bulk-geo', requireAdmin, (req, res) => {
+  const { items } = req.body;
+  if (!Array.isArray(items)) return res.status(400).json({ error: 'items mancante' });
+  const upd = db.prepare('UPDATE contacts SET lat=?, lng=? WHERE telefono=?');
+  let n = 0;
+  const tx = db.transaction(() => items.forEach(i => {
+    if (i.telefono && i.lat != null && i.lng != null) n += upd.run(i.lat, i.lng, String(i.telefono)).changes;
+  }));
+  tx();
+  res.json({ ok: true, aggiornati: n });
 });
 
 router.get('/contacts-export.csv', requireAdmin, (req, res) => {

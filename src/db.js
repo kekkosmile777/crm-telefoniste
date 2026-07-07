@@ -123,6 +123,23 @@ CREATE TABLE IF NOT EXISTS settings (
 );
 `);
 
+// Migrazioni additive (ignora errori se la colonna esiste già)
+for (const sql of [
+  "ALTER TABLE contacts ADD COLUMN lat REAL",
+  "ALTER TABLE contacts ADD COLUMN lng REAL",
+  "ALTER TABLE campaigns ADD COLUMN tipo TEXT NOT NULL DEFAULT 'manuale'",
+  "ALTER TABLE campaigns ADD COLUMN raggio_km INTEGER NOT NULL DEFAULT 25"
+]) { try { db.exec(sql); } catch {} }
+
+// Distanza haversine in km, usabile nelle query SQL
+db.function('dist_km', (lat1, lng1, lat2, lng2) => {
+  if (lat1 == null || lng1 == null || lat2 == null || lng2 == null) return null;
+  const rad = Math.PI / 180;
+  const dLat = (lat2 - lat1) * rad, dLng = (lng2 - lng1) * rad;
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * rad) * Math.cos(lat2 * rad) * Math.sin(dLng / 2) ** 2;
+  return 2 * 6371 * Math.asin(Math.sqrt(a));
+});
+
 // Seed admin se non esiste nessun utente
 const nUsers = db.prepare('SELECT COUNT(*) AS n FROM users').get().n;
 if (nUsers === 0) {

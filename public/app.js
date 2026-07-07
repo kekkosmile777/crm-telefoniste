@@ -208,11 +208,11 @@ async function viewCampagne() {
       <button class="btn primary" id="btn-new-camp">+ Nuova campagna</button>
     </div>
     <div class="table-wrap"><table>
-      <tr><th>Nome</th><th>Stato</th><th>Modalità</th><th>Tot</th><th>Fatti</th><th>Da fare</th><th>App.</th><th>Creata</th><th>Azioni</th></tr>
+      <tr><th>Nome</th><th>Stato</th><th>Tipo</th><th>Tot</th><th>Fatti</th><th>Da fare</th><th>App.</th><th>Creata</th><th>Azioni</th></tr>
       ${rows.map(c => `<tr>
         <td><b>${esc(c.nome)}</b><br><span class="muted" style="font-size:12px">${esc(c.descrizione || '')}</span></td>
         <td><span class="tag ${stTag(c.stato)}">${esc(c.stato.replace('_', ' '))}</span></td>
-        <td>${c.modalita === 'coda' ? 'Coda automatica' : 'Liste assegnate'}</td>
+        <td>${{manuale:'Manuale',predictive:'\u26A1 Predictive',geo:'\uD83D\uDCCD Geo ' + (c.raggio_km||25) + 'km'}[c.tipo] || 'Manuale'}<br><span class="muted" style="font-size:11px">${c.modalita === 'coda' ? 'coda automatica' : 'liste assegnate'}</span></td>
         <td>${c.tot}</td><td>${c.fatti}</td><td>${c.da_fare}</td><td>${c.appuntamenti}</td>
         <td>${fmtDT(c.created_at)}</td>
         <td style="white-space:nowrap">
@@ -247,6 +247,13 @@ function campaignForm(c = null) {
     <label>Descrizione</label><textarea id="cf-desc">${esc(c?.descrizione || '')}</textarea>
     <label>Note operative (visibili alle operatrici)</label><textarea id="cf-note">${esc(c?.note || '')}</textarea>
     <div class="form-grid">
+      <div class="full"><label>Tipo di campagna</label>
+        <select id="cf-tipo" style="width:100%">
+          <option value="manuale" ${!c || c.tipo === 'manuale' ? 'selected' : ''}>Manuale — l'operatrice avvia ogni chiamata</option>
+          <option value="predictive" ${c?.tipo === 'predictive' ? 'selected' : ''}>Predictive — dopo l'esito parte subito la chiamata successiva</option>
+          <option value="geo" ${c?.tipo === 'geo' ? 'selected' : ''}>Geolocalizzata — mappa e coda per vicinanza</option>
+        </select></div>
+      <div id="cf-raggio-wrap" class="${c?.tipo === 'geo' ? '' : 'hidden'}"><label>Raggio zona (km)</label><input id="cf-raggio" type="number" min="1" max="200" style="width:100%" value="${c?.raggio_km || 25}"></div>
       <div><label>Modalità distribuzione</label>
         <select id="cf-mod" style="width:100%">
           <option value="coda" ${c?.modalita !== 'assegnata' ? 'selected' : ''}>Coda automatica</option>
@@ -259,8 +266,9 @@ function campaignForm(c = null) {
       <button class="btn" onclick="closeModal()">Annulla</button>
       <button class="btn primary" id="cf-save">💾 Salva</button>
     </div>`);
+  $('#cf-tipo').onchange = () => $('#cf-raggio-wrap').classList.toggle('hidden', $('#cf-tipo').value !== 'geo');
   $('#cf-save').onclick = async () => {
-    const body = { nome: $('#cf-nome').value.trim(), descrizione: $('#cf-desc').value, note: $('#cf-note').value, modalita: $('#cf-mod').value, max_tentativi: $('#cf-max').value, obiettivo_app: $('#cf-ob').value };
+    const body = { nome: $('#cf-nome').value.trim(), descrizione: $('#cf-desc').value, note: $('#cf-note').value, modalita: $('#cf-mod').value, max_tentativi: $('#cf-max').value, obiettivo_app: $('#cf-ob').value, tipo: $('#cf-tipo').value, raggio_km: $('#cf-raggio').value };
     if (!body.nome) return toast('Nome obbligatorio', true);
     try {
       if (c) await api(`/admin/campaigns/${c.id}`, { method: 'PUT', body });
@@ -496,7 +504,9 @@ const CSV_HEADER_MAP = {
   telefono: ['telefono', 'telefono fisso anagrafica', 'cellulare', 'telefono mobile anagrafica', 'altro telefono anagrafica', 'tel', 'phone', 'numero'],
   comune: ['comune', 'comune codice istat anagrafica', 'città', 'citta', 'city'],
   offerto_da: ['offerto_da', 'offerto da'],
-  parentela: ['parentela', 'grado parentela']
+  parentela: ['parentela', 'grado parentela'],
+  lat: ['lat', 'latitudine', 'latitudine anagrafica', 'latitude'],
+  lng: ['lng', 'lon', 'longitudine', 'longitudine anagrafica', 'longitude']
 };
 
 function importCsv(onDone) {
@@ -537,7 +547,7 @@ function importCsv(onDone) {
         const nome = pick(r, 'nome'), cognome = pick(r, 'cognome');
         let tel = pick(r, 'telefono').replace(/[^+0-9]/g, '');
         if (!tel || (!nome && !cognome)) { scartate++; continue; }
-        rows.push({ nome: nome || cognome, cognome: nome ? cognome : '', telefono: tel, comune: pick(r, 'comune'), offerto_da: pick(r, 'offerto_da'), parentela: pick(r, 'parentela') });
+        rows.push({ nome: nome || cognome, cognome: nome ? cognome : '', telefono: tel, comune: pick(r, 'comune'), offerto_da: pick(r, 'offerto_da'), parentela: pick(r, 'parentela'), lat: pick(r, 'lat'), lng: pick(r, 'lng') });
       }
       $('#csv-preview').innerHTML = `<p><b>${rows.length}</b> contatti pronti${scartate ? ` (<b>${scartate}</b> righe scartate: senza telefono o nome)` : ''}. Anteprima:</p>
         <div class="table-wrap" style="max-height:180px"><table>
@@ -942,6 +952,7 @@ async function initTwilio() {
 async function viewPostazione() {
   await initTwilio();
   const [camps, stats] = await Promise.all([api('/op/campaigns'), api('/op/mystats')]);
+  WS.campsCache = camps;
   $('#view').innerHTML = `
     <h2 class="page-title">Postazione <em>Chiamate</em></h2>
     <div class="cards-row">
@@ -963,6 +974,10 @@ async function viewPostazione() {
             </select>
             <button class="btn primary big" id="ws-next">▶ Prossima chiamata</button>
           </div>
+          <div id="ws-geo-bar" class="toolbar hidden" style="margin:10px 0 0">
+            <button class="btn" id="ws-geo-btn">\uD83D\uDCCD Scegli posizione</button>
+            <span id="ws-geo-label" class="muted"></span>
+          </div>
           ${camps.length === 0 ? '<p class="muted" style="margin-top:10px">Nessuna campagna attiva con contatti per te. Chiedi all\'amministratore.</p>' : ''}
         </div>
       </div>
@@ -974,19 +989,97 @@ async function viewPostazione() {
         </div>
       </div>
     </div>`;
-  $('#ws-campaign').onchange = e => WS.selectedCampaign = e.target.value || null;
+  function refreshGeoBar() {
+    const camp = (WS.campsCache || []).find(c => c.id == WS.selectedCampaign);
+    const isGeo = camp?.tipo === 'geo';
+    $('#ws-geo-bar').classList.toggle('hidden', !isGeo);
+    if (isGeo) $('#ws-geo-label').textContent = WS.geoCenter ? `Zona attiva: ${WS.geoCenter.label} (raggio ${camp.raggio_km || 25} km)` : 'Nessuna posizione scelta';
+  }
+  $('#ws-campaign').onchange = e => {
+    WS.selectedCampaign = e.target.value || null;
+    if (!WS.geoCenter || WS.geoCenter.campaign != WS.selectedCampaign) WS.geoCenter = null;
+    refreshGeoBar();
+  };
+  $('#ws-geo-btn').onclick = () => openGeoMap();
+  refreshGeoBar();
   $('#ws-next').onclick = nextContact;
+  if (WS.autoNext) { WS.autoNext = false; nextContact().then(() => { if (WS.current) startCall(); }); }
   if (WS.current) renderContact(); // ripristina se si torna sulla vista
 }
 
 async function nextContact() {
   if (WS.callId) return toast('Chiudi prima la chiamata in corso', true);
   try {
-    const r = await api('/op/next', { method: 'POST', body: { campaign_id: WS.selectedCampaign ? parseInt(WS.selectedCampaign) : null } });
+    const body = { campaign_id: WS.selectedCampaign ? parseInt(WS.selectedCampaign) : null };
+    if (WS.geoCenter && WS.geoCenter.campaign == WS.selectedCampaign) { body.lat = WS.geoCenter.lat; body.lng = WS.geoCenter.lng; }
+    const r = await api('/op/next', { method: 'POST', body });
+    if (r.tipo === 'geo_select') { toast(r.motivo); openGeoMap(); return; }
+    if (r.tipo === 'geo_esaurita') { WS.geoCenter = null; toast(r.motivo, true); openGeoMap(); return; }
     if (r.tipo === 'vuoto') { toast(r.motivo, true); return; }
     WS.current = r;
     WS.presence = 'idle';
     renderContact();
+  } catch (e) { toast(e.message, true); }
+}
+
+/* ---------- mappa geolocalizzata (Leaflet) ---------- */
+async function loadLeaflet() {
+  if (window.L) return;
+  await new Promise((ok, err) => {
+    const css = document.createElement('link');
+    css.rel = 'stylesheet'; css.href = 'https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css';
+    document.head.appendChild(css);
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js';
+    s.onload = ok; s.onerror = () => err(new Error('Mappa non caricabile'));
+    document.body.appendChild(s);
+  });
+}
+
+async function openGeoMap() {
+  if (!WS.selectedCampaign) return toast('Seleziona prima una campagna', true);
+  const camp = (WS.campsCache || []).find(c => c.id == WS.selectedCampaign);
+  const raggio = camp?.raggio_km || 25;
+  try {
+    await loadLeaflet();
+    const d = await api(`/op/campaigns/${WS.selectedCampaign}/geo-points`);
+    openModal('\uD83D\uDCCD Scegli la posizione di partenza', `
+      <p class="muted" style="margin-bottom:8px">${d.points.length} contatti da chiamare sulla mappa${d.senza_posizione ? ` (+${d.senza_posizione} senza posizione, esclusi)` : ''}.
+      Clicca un puntino: la coda proseguirà per vicinanza entro <b>${raggio} km</b>.</p>
+      <div id="geo-map" style="height:440px; border-radius:10px"></div>
+      <div class="modal-actions">
+        <span id="geo-sel" class="muted" style="margin-right:auto">Nessun punto selezionato</span>
+        <button class="btn" onclick="closeModal()">Annulla</button>
+        <button class="btn primary" id="geo-start" disabled>▶ Inizia da qui</button>
+      </div>`);
+    if (!d.points.length) { $('#geo-map').innerHTML = '<p class="muted" style="padding:20px">Nessun contatto con posizione in questa campagna.</p>'; return; }
+    setTimeout(() => {
+      const map = L.map('geo-map');
+      L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; OpenStreetMap' }).addTo(map);
+      const bounds = [];
+      let sel = null, circle = null;
+      d.points.forEach(p => {
+        bounds.push([p.lat, p.lng]);
+        const m = L.circleMarker([p.lat, p.lng], { radius: 6, color: '#7c5cff', fillColor: '#7c5cff', fillOpacity: .75, weight: 1 });
+        m.addTo(map).bindTooltip(`${esc(p.nome || '')} ${esc(p.cognome || '')} — ${esc(p.comune || '')}`);
+        m.on('click', () => {
+          sel = p;
+          if (circle) circle.remove();
+          circle = L.circle([p.lat, p.lng], { radius: raggio * 1000, color: '#22a35c', fillOpacity: .08 }).addTo(map);
+          $('#geo-sel').textContent = `Partenza: ${p.nome || ''} ${p.cognome || ''} (${p.comune || '—'})`;
+          $('#geo-start').disabled = false;
+        });
+      });
+      map.fitBounds(bounds, { padding: [30, 30] });
+      $('#geo-start').onclick = () => {
+        if (!sel) return;
+        WS.geoCenter = { lat: sel.lat, lng: sel.lng, label: sel.comune || (sel.nome + ' ' + (sel.cognome || '')), campaign: WS.selectedCampaign };
+        closeModal();
+        toast(`Zona impostata: ${WS.geoCenter.label} — raggio ${raggio} km`);
+        const bar = $('#ws-geo-label'); if (bar) bar.textContent = `Zona attiva: ${WS.geoCenter.label} (raggio ${raggio} km)`;
+        nextContact();
+      };
+    }, 60);
   } catch (e) { toast(e.message, true); }
 }
 
@@ -1001,6 +1094,7 @@ function renderContact() {
       ${c.offerto_da ? `<span class="tag gray">🤝 ${esc(c.offerto_da)}</span>` : ''}
       ${c.parentela ? `<span class="tag gray">👥 ${esc(c.parentela)}</span>` : ''}
       ${WS.current.tentativi ? `<span class="tag gray">tent. ${WS.current.tentativi}</span>` : ''}
+      ${WS.current.dist_km != null ? `<span class="tag green">\uD83D\uDCCD ${WS.current.dist_km} km</span>` : ''}
     </div>
     <div class="cphone">${esc(c.telefono)}</div>
     ${c.note ? `<p class="muted">📝 ${esc(c.note)}</p>` : ''}
@@ -1173,8 +1267,14 @@ function renderEsitoForm() {
       try {
         await api(`/op/calls/${WS.callId}/end`, { method: 'POST', body });
         WS.callId = null; WS.callStart = null; WS.durata = null; WS.current = null; WS.presence = 'idle';
-        toast('Esito salvato ✓');
-        viewPostazione();
+        const camp = (WS.campsCache || []).find(c => c.id == WS.selectedCampaign);
+        if (camp?.tipo === 'predictive' && CURRENT_VIEW === 'postazione') {
+          WS.autoNext = true;
+          toast('Esito salvato ✓ — parte la prossima chiamata...');
+        } else {
+          toast('Esito salvato ✓');
+        }
+        if (CURRENT_VIEW === 'postazione') viewPostazione();
       } catch (e) { toast(e.message, true); }
     };
   });
