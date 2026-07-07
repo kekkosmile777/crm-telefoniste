@@ -884,7 +884,7 @@ async function initTwilio() {
       WS.device.updateToken(token);
     });
     await WS.device.register();
-  } catch (e) { console.warn('Twilio non disponibile:', e.message); WS.mode = 'manuale'; }
+  } catch (e) { console.warn('Twilio non disponibile:', e.message); toast('Softphone non disponibile: ' + e.message, true); WS.mode = 'manuale'; }
 }
 
 async function viewPostazione() {
@@ -1179,6 +1179,7 @@ async function viewTelefono() {
   $('#dial-call').onclick = async () => {
     const tel = input.value.trim();
     if (!tel) return toast('Digita un numero', true);
+    if (!WS.twilioReady) return toast('Softphone non attivo: ricarica la pagina e controlla che il microfono sia consentito. Se il problema persiste avvisa l\'amministratore.', true);
     try {
       const c = await api('/op/resolve-number', { method: 'POST', body: { telefono: tel } });
       WS.current = { tipo: 'manuale', campaign_id: null, contact: c };

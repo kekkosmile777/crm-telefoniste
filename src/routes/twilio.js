@@ -73,7 +73,9 @@ router.post('/voice', (req, res) => {
   if (!to || !callerId) {
     return res.send('<Response><Say language="it-IT">Configurazione non valida</Say></Response>');
   }
-  const escaped = to.replace(/[^+0-9]/g, '');
+  let escaped = to.replace(/[^+0-9]/g, '');
+  if (escaped.startsWith('00')) escaped = '+' + escaped.slice(2);
+  else if (!escaped.startsWith('+')) escaped = '+39' + escaped; // default Italia
   res.send(`<Response><Dial callerId="${callerId}" answerOnBridge="true"><Number>${escaped}</Number></Dial></Response>`);
 });
 
