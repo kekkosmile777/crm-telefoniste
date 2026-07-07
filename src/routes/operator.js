@@ -189,4 +189,16 @@ router.post('/heartbeat', (req, res) => {
   res.json({ ok: true });
 });
 
+/* Risoluzione numero per chiamata manuale (tastierino) */
+router.post('/resolve-number', (req, res) => {
+  const tel = String((req.body || {}).telefono || '').replace(/[^+0-9]/g, '');
+  if (!tel || tel.length < 3) return res.status(400).json({ error: 'Numero non valido' });
+  let c = db.prepare('SELECT * FROM contacts WHERE telefono = ?').get(tel);
+  if (!c) {
+    const r = db.prepare("INSERT INTO contacts (nome, cognome, telefono, esito) VALUES ('Chiamata', 'manuale', ?, 'da_chiamare')").run(tel);
+    c = db.prepare('SELECT * FROM contacts WHERE id = ?').get(r.lastInsertRowid);
+  }
+  res.json(c);
+});
+
 module.exports = router;

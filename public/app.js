@@ -102,6 +102,7 @@ const NAV_ADMIN = [
   { id: 'monitor', icon: '📡', label: 'Monitor live' },
   { id: 'campagne', icon: '🚀', label: 'Campagne' },
   { id: 'registro', icon: '📞', label: 'Registro chiamate' },
+  { id: 'telefono', icon: '🔢', label: 'Telefono' },
   { sect: 'Gestione' },
   { id: 'contatti', icon: '👤', label: 'Contatti' },
   { id: 'richiami', icon: '🔄', label: 'Richiami' },
@@ -115,6 +116,7 @@ const NAV_ADMIN = [
 const NAV_OP = [
   { sect: 'Lavoro' },
   { id: 'postazione', icon: '☎️', label: 'Postazione' },
+  { id: 'telefono', icon: '🔢', label: 'Telefono' },
   { id: 'richiami-op', icon: '🔄', label: 'I miei richiami' },
   { id: 'chiamate-op', icon: '📞', label: 'Le mie chiamate' },
   { id: 'appuntamenti-op', icon: '📅', label: 'I miei appuntamenti' },
@@ -1133,12 +1135,65 @@ async function viewAppuntamentiOp() {
     </table></div>`;
 }
 
+
+/* ---------- TELEFONO DIRETTO (tastierino) ---------- */
+async function viewTelefono() {
+  await initTwilio();
+  $('#view').innerHTML = `
+    <h2 class="page-title">Telefono <em>Diretto</em></h2>
+    <div class="workstation">
+      <div>
+        <div class="card" style="text-align:center">
+          <label>Numero da chiamare</label>
+          <input id="dial-num" style="width:100%; max-width:280px; font-size:22px; text-align:center; margin:4px auto 12px; display:block" placeholder="+39...">
+          <div class="dialpad">
+            ${['1','2','3','4','5','6','7','8','9','*','0','#'].map(k => `<button class="dial-key" data-k="${k}">${k}</button>`).join('')}
+          </div>
+          <div class="call-buttons" style="margin-top:10px">
+            <button class="btn" id="dial-back">\u232B</button>
+            <button class="btn" id="dial-clear">\u2715 Azzera</button>
+          </div>
+        </div>
+        <div class="card contact-card" id="ws-contact">
+          <p class="muted">Digita un numero e premi Chiama</p>
+          <div class="call-status" id="ws-status">${WS.twilioReady ? '<span class="tag green">softphone pronto</span>' : '<span class="tag gray">modalit\u00E0 manuale \u2014 chiama dal tuo telefono</span>'}</div>
+          <div class="call-timer hidden" id="ws-timer">00:00</div>
+          <div class="call-buttons" id="ws-buttons">
+            <button class="btn success big" id="dial-call">\uD83D\uDCDE Chiama</button>
+          </div>
+        </div>
+      </div>
+      <div>
+        <div class="card" id="ws-esito-card">
+          <b>Esito chiamata</b>
+          <p class="muted" id="ws-esito-hint" style="margin:6px 0 10px">Disponibile dopo la chiamata</p>
+          <div id="ws-esito-body"></div>
+        </div>
+      </div>
+    </div>`;
+
+  const input = $('#dial-num');
+  $('#view').querySelectorAll('.dial-key').forEach(b => b.onclick = () => { input.value += b.dataset.k; });
+  $('#dial-back').onclick = () => { input.value = input.value.slice(0, -1); };
+  $('#dial-clear').onclick = () => { input.value = ''; };
+  $('#dial-call').onclick = async () => {
+    const tel = input.value.trim();
+    if (!tel) return toast('Digita un numero', true);
+    try {
+      const c = await api('/op/resolve-number', { method: 'POST', body: { telefono: tel } });
+      WS.current = { tipo: 'manuale', campaign_id: null, contact: c };
+      renderContact();
+      await startCall();
+    } catch (e) { toast(e.message, true); }
+  };
+}
+
 /* ---------- registry ---------- */
 const VIEWS = {
   dashboard: viewDashboard, monitor: viewMonitor, campagne: viewCampagne, contatti: viewContatti,
   registro: viewRegistro, richiami: viewRichiami, appuntamenti: viewAppuntamenti, report: viewReport,
   operatrici: viewOperatrici, agenti: viewAgenti, impostazioni: viewImpostazioni,
-  postazione: viewPostazione, 'richiami-op': viewRichiamiOp, 'chiamate-op': viewChiamateOp, 'appuntamenti-op': viewAppuntamentiOp
+  postazione: viewPostazione, telefono: viewTelefono, 'richiami-op': viewRichiamiOp, 'chiamate-op': viewChiamateOp, 'appuntamenti-op': viewAppuntamentiOp
 };
 
 boot();

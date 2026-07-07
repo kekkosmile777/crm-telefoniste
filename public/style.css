@@ -134,3 +134,8 @@ tr:hover td { background: #f8f7fd; }
 
 .pagination { display: flex; gap: 8px; align-items: center; margin-top: 12px; }
 .checkbox-cell { width: 34px; }
+
+/* TASTIERINO */
+.dialpad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; max-width: 260px; margin: 0 auto; }
+.dial-key { font-size: 20px; padding: 14px; border: 1px solid var(--border); border-radius: 10px; background: #fff; cursor: pointer; }
+.dial-key:hover { border-color: var(--accent); background: #f5f2ff; }
