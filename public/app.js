@@ -876,7 +876,7 @@ async function initTwilio() {
     const cfg = await api('/twilio/config');
     if (!cfg.configured || typeof Twilio === 'undefined') { WS.mode = 'manuale'; return; }
     const { token } = await api('/twilio/token');
-    WS.device = new Twilio.Device(token, { logLevel: 'error' });
+    WS.device = new Twilio.Device(token, { logLevel: 'error', codecPreferences: ['opus', 'pcmu'], maxAverageBitrate: 40000 });
     WS.device.on('registered', () => { WS.twilioReady = true; WS.mode = 'twilio'; updateCallUI(); });
     WS.device.on('error', e => { console.error('Twilio:', e); toast('Errore telefonia: ' + e.message, true); });
     WS.device.on('tokenWillExpire', async () => {
@@ -958,6 +958,28 @@ function renderContact() {
   updateCallUI();
 }
 
+
+/* Controlli audio in chiamata */
+function setSpeakerVolume(v) {
+  WS.volume = v;
+  document.querySelectorAll('audio').forEach(el => { try { el.volume = v / 100; } catch {} });
+}
+async function setMicAGC(on) {
+  WS.agc = on;
+  try {
+    await WS.device.audio.setAudioConstraints({ echoCancellation: true, noiseSuppression: true, autoGainControl: on });
+    toast(on ? 'Sensibilita\u0300 microfono: automatica' : 'Sensibilita\u0300 microfono: fissa');
+  } catch (e) { toast('Impossibile applicare: ' + e.message, true); }
+}
+function toggleMute() {
+  if (!WS.connection) return;
+  const m = !WS.connection.isMuted();
+  WS.connection.mute(m);
+  const b = $('#ws-mute');
+  if (b) { b.textContent = m ? '\uD83C\uDF99 Riattiva' : '\uD83D\uDD07 Muto'; b.classList.toggle('danger', m); }
+  toast(m ? 'Microfono in muto' : 'Microfono riattivato');
+}
+
 function updateCallUI() {
   const btns = $('#ws-buttons');
   if (!btns || !WS.current) return;
@@ -965,8 +987,20 @@ function updateCallUI() {
   if (WS.callId) {
     status.innerHTML = WS.mode === 'twilio' ? '🔴 <b>In chiamata (softphone)</b>' : '📱 <b>In chiamata (dal tuo telefono)</b>';
     $('#ws-timer').classList.remove('hidden');
-    btns.innerHTML = `<button class="btn danger big" id="ws-hangup">📵 Chiudi chiamata</button>`;
+    btns.innerHTML = `
+      <button class="btn danger big" id="ws-hangup">📵 Chiudi chiamata</button>
+      ${WS.connection ? `<button class="btn" id="ws-mute">${WS.connection.isMuted() ? '🎙 Riattiva' : '🔇 Muto'}</button>
+      <div class="audio-controls">
+        🔊 <input type="range" id="ws-vol" min="0" max="100" value="${WS.volume ?? 100}" title="Volume cuffie">
+        <label class="agc-label"><input type="checkbox" id="ws-agc" ${WS.agc !== false ? 'checked' : ''}> mic auto</label>
+      </div>` : ''}`;
     $('#ws-hangup').onclick = hangup;
+    const mb = $('#ws-mute');
+    if (mb) mb.onclick = toggleMute;
+    const vs = $('#ws-vol');
+    if (vs) vs.oninput = () => setSpeakerVolume(parseInt(vs.value));
+    const ag = $('#ws-agc');
+    if (ag) ag.onchange = () => setMicAGC(ag.checked);
   } else {
     status.innerHTML = WS.twilioReady ? '<span class="tag green">softphone pronto</span>' : '<span class="tag gray">modalità manuale — chiama dal tuo telefono</span>';
     $('#ws-timer').classList.add('hidden');
@@ -1000,6 +1034,7 @@ async function startCall() {
 
     if (WS.twilioReady) {
       WS.connection = await WS.device.connect({ params: { To: c.telefono } });
+      WS.connection.on('accept', () => { setSpeakerVolume(WS.volume ?? 100); updateCallUI(); });
       WS.connection.on('disconnect', () => { if (WS.callId) onCallEnded(); });
       WS.connection.on('error', e => toast('Errore chiamata: ' + e.message, true));
     }
