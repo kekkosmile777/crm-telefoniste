@@ -131,7 +131,9 @@ for (const sql of [
   "ALTER TABLE contacts ADD COLUMN cap TEXT",
   "ALTER TABLE campaigns ADD COLUMN tipo TEXT NOT NULL DEFAULT 'manuale'",
   "ALTER TABLE campaigns ADD COLUMN raggio_km INTEGER NOT NULL DEFAULT 25",
-  "ALTER TABLE users ADD COLUMN permessi TEXT"
+  "ALTER TABLE users ADD COLUMN permessi TEXT",
+  "ALTER TABLE users ADD COLUMN orario_dal TEXT",
+  "ALTER TABLE users ADD COLUMN orario_al TEXT"
 ]) { try { db.exec(sql); } catch {} }
 
 // Distanza haversine in km, usabile nelle query SQL

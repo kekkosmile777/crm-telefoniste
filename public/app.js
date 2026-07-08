@@ -32,8 +32,12 @@ async function api(path, opts = {}) {
   const headers = { 'Content-Type': 'application/json' };
   if (TOKEN) headers.Authorization = 'Bearer ' + TOKEN;
   const res = await fetch('/api' + path, { ...opts, headers, body: opts.body ? JSON.stringify(opts.body) : undefined });
-  if (res.status === 401) { logout(false); throw new Error('Sessione scaduta'); }
   const data = await res.json().catch(() => ({}));
+  if (res.status === 401) {
+    logout(false);
+    if (data.error) { const el = $('#login-error'); el.textContent = data.error; el.classList.remove('hidden'); }
+    throw new Error(data.error || 'Sessione scaduta');
+  }
   if (!res.ok) throw new Error(data.error || 'Errore server');
   return data;
 }
@@ -865,10 +869,11 @@ async function viewOperatrici() {
     <h2 class="page-title">Gestione <em>Utenti</em></h2>
     <div class="toolbar"><button class="btn primary" id="u-new">+ Nuovo utente</button></div>
     <div class="table-wrap"><table>
-      <tr><th>Nome</th><th>Username</th><th>Ruolo</th><th>Funzioni</th><th>Stato</th><th>Creato</th><th>Azioni</th></tr>
+      <tr><th>Nome</th><th>Username</th><th>Ruolo</th><th>Orario</th><th>Funzioni</th><th>Stato</th><th>Creato</th><th>Azioni</th></tr>
       ${rows.map(u => `<tr>
         <td><b>${esc(u.nome)}</b></td><td>${esc(u.username)}</td>
         <td><span class="tag ${u.ruolo === 'admin' ? '' : 'green'}">${u.ruolo === 'admin' ? 'Admin' : 'Operatrice'}</span></td>
+        <td>${u.orario_dal || u.orario_al ? `<span class="tag">${esc(u.orario_dal || '—')}–${esc(u.orario_al || '—')}</span>` : '<span class="muted">generale</span>'}</td>
         <td>${u.permessi ? `<span class="tag orange">${u.permessi.length} abilitate</span>` : '<span class="tag green">tutte</span>'}</td>
         <td>${u.attivo ? '<span class="tag green">attivo</span>' : '<span class="tag red">disattivato</span>'}</td>
         <td>${fmtDT(u.created_at)}</td>
@@ -896,6 +901,8 @@ function userForm(u) {
         <option value="operatore" ${u?.ruolo !== 'admin' ? 'selected' : ''}>Operatrice</option>
         <option value="admin" ${u?.ruolo === 'admin' ? 'selected' : ''}>Amministratore</option>
       </select></div>
+      <div><label>🕐 Login dalle (vuoto = orario generale)</label><input id="uf-dal" type="time" style="width:100%" value="${u?.orario_dal || ''}"></div>
+      <div><label>🕐 fino alle</label><input id="uf-al" type="time" style="width:100%" value="${u?.orario_al || ''}"></div>
     </div>
     <label style="margin-top:14px">Funzioni abilitate</label>
     <div class="toolbar" style="margin-bottom:6px">
@@ -931,12 +938,12 @@ function userForm(u) {
     if (!permessi.length) return toast('Abilita almeno una funzione', true);
     try {
       if (u) {
-        const body = { nome: $('#uf-nome').value, ruolo: $('#uf-ruolo').value, permessi };
+        const body = { nome: $('#uf-nome').value, ruolo: $('#uf-ruolo').value, permessi, orario_dal: $('#uf-dal').value || null, orario_al: $('#uf-al').value || null };
         if ($('#uf-pass').value) body.password = $('#uf-pass').value;
         await api('/admin/users/' + u.id, { method: 'PUT', body });
         if (isSelf) { USER.permessi = permessi; }
       } else {
-        await api('/admin/users', { method: 'POST', body: { nome: $('#uf-nome').value, username: $('#uf-user').value, password: $('#uf-pass').value, ruolo: $('#uf-ruolo').value, permessi } });
+        await api('/admin/users', { method: 'POST', body: { nome: $('#uf-nome').value, username: $('#uf-user').value, password: $('#uf-pass').value, ruolo: $('#uf-ruolo').value, permessi, orario_dal: $('#uf-dal').value || null, orario_al: $('#uf-al').value || null } });
       }
       closeModal(); toast('Utente salvato'); viewOperatrici();
     } catch (e) { toast(e.message, true); }
@@ -1001,6 +1008,16 @@ async function viewImpostazioni() {
       </div>` : ''}
     </div>
     <div class="card">
+      <b>🕐 Orario di lavoro generale (operatrici)</b>
+      <p class="muted" style="margin-top:6px">Fuori da questa fascia le operatrici non possono accedere e chi è collegata viene scollegata. Vuoto = nessun limite. In Utenti puoi impostare un orario personalizzato che ha la precedenza.</p>
+      <div class="toolbar" style="margin-bottom:0">
+        <label style="margin:0">Dalle</label><input type="time" id="set-orario-dal" value="${esc(s.orario_dal || '')}">
+        <label style="margin:0">alle</label><input type="time" id="set-orario-al" value="${esc(s.orario_al || '')}">
+        <button class="btn primary" id="set-orario-save">💾 Salva orario</button>
+        <button class="btn" id="set-orario-clear">✕ Nessun limite</button>
+      </div>
+    </div>
+    <div class="card">
       <b>📝 Note e promemoria</b>
       <textarea id="set-note" style="margin-top:10px; min-height:120px">${esc(s.note || '')}</textarea>
       <div style="margin-top:10px"><button class="btn primary" id="set-save">💾 Salva</button></div>
@@ -1010,6 +1027,14 @@ async function viewImpostazioni() {
       <p class="muted" style="margin-top:8px">Cambia la tua password dalla sezione Utenti. Ricorda di cambiare la password admin predefinita al primo accesso.</p>
     </div>`;
   $('#set-save').onclick = async () => { await api('/admin/settings', { method: 'PUT', body: { note: $('#set-note').value } }); toast('Salvato'); };
+  $('#set-orario-save').onclick = async () => {
+    await api('/admin/settings', { method: 'PUT', body: { orario_dal: $('#set-orario-dal').value, orario_al: $('#set-orario-al').value } });
+    toast('Orario generale salvato');
+  };
+  $('#set-orario-clear').onclick = async () => {
+    await api('/admin/settings', { method: 'PUT', body: { orario_dal: '', orario_al: '' } });
+    toast('Limite orario rimosso'); viewImpostazioni();
+  };
 
   if (tw.twilio_ok) {
     api('/twilio/numbers').then(nums => {

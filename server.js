@@ -18,6 +18,7 @@ app.post('/api/auth/login', (req, res) => {
   if (!username || !password) return res.status(400).json({ error: 'Username e password obbligatori' });
   const result = login(username.trim().toLowerCase(), password);
   if (!result) return res.status(401).json({ error: 'Credenziali non valide' });
+  if (result.error) return res.status(403).json({ error: result.error });
   res.json(result);
 });
 

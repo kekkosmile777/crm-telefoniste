@@ -7,18 +7,18 @@ const router = express.Router();
 
 /* ---------- UTENTI (operatrici e admin) ---------- */
 router.get('/users', (req, res) => {
-  const rows = db.prepare('SELECT id, username, nome, ruolo, attivo, created_at, permessi FROM users ORDER BY nome').all();
+  const rows = db.prepare('SELECT id, username, nome, ruolo, attivo, created_at, permessi, orario_dal, orario_al FROM users ORDER BY nome').all();
   rows.forEach(r => { try { r.permessi = r.permessi ? JSON.parse(r.permessi) : null; } catch { r.permessi = null; } });
   res.json(rows);
 });
 
 router.post('/users', (req, res) => {
-  const { username, password, nome, ruolo, permessi } = req.body;
+  const { username, password, nome, ruolo, permessi, orario_dal, orario_al } = req.body;
   if (!username || !password || !nome) return res.status(400).json({ error: 'Username, password e nome obbligatori' });
   if (!['admin', 'operatore'].includes(ruolo)) return res.status(400).json({ error: 'Ruolo non valido' });
   try {
-    const r = db.prepare('INSERT INTO users (username, password_hash, nome, ruolo, permessi) VALUES (?,?,?,?,?)')
-      .run(username.trim().toLowerCase(), bcrypt.hashSync(password, 10), nome, ruolo, Array.isArray(permessi) ? JSON.stringify(permessi) : null);
+    const r = db.prepare('INSERT INTO users (username, password_hash, nome, ruolo, permessi, orario_dal, orario_al) VALUES (?,?,?,?,?,?,?)')
+      .run(username.trim().toLowerCase(), bcrypt.hashSync(password, 10), nome, ruolo, Array.isArray(permessi) ? JSON.stringify(permessi) : null, orario_dal || null, orario_al || null);
     res.json({ id: r.lastInsertRowid, username, nome, ruolo });
   } catch (e) {
     res.status(400).json({ error: 'Username già esistente' });
@@ -28,11 +28,13 @@ router.post('/users', (req, res) => {
 router.put('/users/:id', (req, res) => {
   const u = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
   if (!u) return res.status(404).json({ error: 'Utente non trovato' });
-  const { nome, ruolo, attivo, password, permessi } = req.body;
+  const { nome, ruolo, attivo, password, permessi, orario_dal, orario_al } = req.body;
   db.prepare('UPDATE users SET nome=?, ruolo=?, attivo=? WHERE id=?')
     .run(nome ?? u.nome, ['admin','operatore'].includes(ruolo) ? ruolo : u.ruolo, attivo != null ? (attivo ? 1 : 0) : u.attivo, req.params.id);
   if (permessi !== undefined) db.prepare('UPDATE users SET permessi=? WHERE id=?')
     .run(Array.isArray(permessi) ? JSON.stringify(permessi) : null, req.params.id);
+  if (orario_dal !== undefined || orario_al !== undefined) db.prepare('UPDATE users SET orario_dal=?, orario_al=? WHERE id=?')
+    .run(orario_dal || null, orario_al || null, req.params.id);
   if (password) db.prepare('UPDATE users SET password_hash=? WHERE id=?').run(bcrypt.hashSync(password, 10), req.params.id);
   res.json({ ok: true });
 });
