@@ -11,18 +11,29 @@ router.get('/esiti', (req, res) => res.json(ESITI));
 
 // Lista contatti con filtri e paginazione
 router.get('/contacts', (req, res) => {
-  const { search = '', esito = '', comune = '', page = 1, per = 50 } = req.query;
+  const { search = '', esito = '', comune = '', provincia = '', cap = '', offerto_da = '', parentela = '', geo = '', page = 1, per = 50 } = req.query;
   const where = [];
   const params = {};
   if (search) { where.push("(nome || ' ' || COALESCE(cognome,'') LIKE @s OR telefono LIKE @s)"); params.s = `%${search}%`; }
   if (esito) { where.push('esito = @esito'); params.esito = esito; }
   if (comune) { where.push('comune = @comune'); params.comune = comune; }
+  if (provincia) { where.push('provincia = @provincia'); params.provincia = provincia; }
+  if (cap) { where.push('cap LIKE @cap'); params.cap = cap.trim() + '%'; }
+  if (offerto_da) { where.push('offerto_da = @offerto_da'); params.offerto_da = offerto_da; }
+  if (parentela) { where.push('parentela = @parentela'); params.parentela = parentela; }
+  if (geo === 'si') where.push('lat IS NOT NULL');
+  if (geo === 'no') where.push('lat IS NULL');
   const w = where.length ? 'WHERE ' + where.join(' AND ') : '';
   const total = db.prepare(`SELECT COUNT(*) n FROM contacts ${w}`).get(params).n;
   const perN = Math.min(parseInt(per) || 50, 200);
   const offset = (Math.max(parseInt(page) || 1, 1) - 1) * perN;
   const rows = db.prepare(`SELECT * FROM contacts ${w} ORDER BY id DESC LIMIT ${perN} OFFSET ${offset}`).all(params);
   res.json({ rows, total, page: parseInt(page) || 1, per: perN });
+});
+
+router.get('/contacts/filtri', (req, res) => {
+  const dv = col => db.prepare(`SELECT DISTINCT ${col} v FROM contacts WHERE ${col} IS NOT NULL AND ${col} != '' ORDER BY 1 LIMIT 500`).all().map(r => r.v);
+  res.json({ comuni: dv('comune'), province: dv('provincia'), offerti: dv('offerto_da'), parentele: dv('parentela') });
 });
 
 router.get('/contacts/comuni', (req, res) => {

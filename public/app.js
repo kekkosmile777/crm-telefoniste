@@ -427,9 +427,19 @@ async function viewContatti() {
   $('#view').innerHTML = `
     <h2 class="page-title">Gestione <em>Contatti</em></h2>
     <div class="toolbar">
-      <input id="ct-search" placeholder="🔍 nome o telefono..." style="width:220px">
+      <input id="ct-search" placeholder="🔍 nome o telefono..." style="width:200px">
       <select id="ct-esito"><option value="">Tutti gli esiti</option>${Object.entries(ESITI_LABEL).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>
       <select id="ct-comune"><option value="">Tutti i comuni</option></select>
+      <select id="ct-provincia"><option value="">Prov.</option></select>
+      <input id="ct-cap" placeholder="CAP" maxlength="5" style="width:80px">
+      <select id="ct-offerto"><option value="">Offerto da</option></select>
+      <select id="ct-parentela"><option value="">Parentela</option></select>
+      <select id="ct-geo">
+        <option value="">Posizione: tutte</option>
+        <option value="si">✓ Geolocalizzati</option>
+        <option value="no">⚠ Non geolocalizzati</option>
+      </select>
+      <button class="btn" id="ct-reset" title="Azzera filtri">✕</button>
       <span class="spacer"></span>
       ${isAdmin ? `<button class="btn" id="ct-import">⬆ Importa CSV</button>
       <a class="btn" id="ct-export" href="#">⬇ Esporta CSV</a>` : ''}
@@ -437,23 +447,31 @@ async function viewContatti() {
     </div>
     <div id="ct-table-wrap"></div>`;
 
-  api('/contacts/comuni').then(cs => $('#ct-comune').innerHTML += cs.map(c => `<option>${esc(c)}</option>`).join(''));
+  api('/contacts/filtri').then(f => {
+    $('#ct-comune').innerHTML += f.comuni.map(c => `<option>${esc(c)}</option>`).join('');
+    $('#ct-provincia').innerHTML += f.province.map(c => `<option>${esc(c)}</option>`).join('');
+    $('#ct-offerto').innerHTML += f.offerti.map(c => `<option>${esc(c)}</option>`).join('');
+    $('#ct-parentela').innerHTML += f.parentele.map(c => `<option>${esc(c)}</option>`).join('');
+  });
 
   async function render() {
-    const q = new URLSearchParams({ search: $('#ct-search').value, esito: $('#ct-esito').value, comune: $('#ct-comune').value, page: contactsPage, per: 50 });
+    const q = new URLSearchParams({ search: $('#ct-search').value, esito: $('#ct-esito').value, comune: $('#ct-comune').value,
+      provincia: $('#ct-provincia').value, cap: $('#ct-cap').value, offerto_da: $('#ct-offerto').value,
+      parentela: $('#ct-parentela').value, geo: $('#ct-geo').value, page: contactsPage, per: 50 });
     const d = await api('/contacts?' + q);
     const pages = Math.max(Math.ceil(d.total / d.per), 1);
     $('#ct-table-wrap').innerHTML = `
       <div class="table-wrap"><table>
-        <tr><th>Nome</th><th>Telefono</th><th>Comune</th><th>Offerto da</th><th>Parentela</th><th>Esito</th><th>Azioni</th></tr>
+        <tr><th>Nome</th><th>Telefono</th><th>Comune</th><th>Prov</th><th>CAP</th><th>Offerto da</th><th>Parentela</th><th>Esito</th><th>Azioni</th></tr>
         ${d.rows.map(c => `<tr>
           <td><b>${esc(nomeCompleto(c))}</b></td><td>${esc(c.telefono)}</td><td>${esc(c.comune || '')}</td>
+          <td>${esc(c.provincia || '')}</td><td>${esc(c.cap || '')}</td>
           <td>${esc(c.offerto_da || '')}</td><td>${esc(c.parentela || '')}</td><td>${tag(c.esito)}${c.lat == null ? ' <span class="tag red" title="Non geolocalizzato">⚠</span>' : ''}</td>
           <td style="white-space:nowrap">
             <button class="btn" data-view-ct="${c.id}">👁</button>
             <button class="btn" data-edit-ct="${c.id}">✏️</button>
             ${isAdmin ? `<button class="btn danger" data-del-ct="${c.id}">🗑</button>` : ''}
-          </td></tr>`).join('') || '<tr><td colspan="7" class="muted">Nessun contatto</td></tr>'}
+          </td></tr>`).join('') || '<tr><td colspan="9" class="muted">Nessun contatto</td></tr>'}
       </table></div>
       <div class="pagination">
         <button class="btn" id="pg-prev" ${contactsPage <= 1 ? 'disabled' : ''}>← Prec</button>
@@ -469,7 +487,12 @@ async function viewContatti() {
       await api('/contacts/' + b.dataset.delCt, { method: 'DELETE' }); toast('Contatto eliminato'); render();
     });
   }
-  ['ct-search', 'ct-esito', 'ct-comune'].forEach(id => $('#' + id).oninput = () => { contactsPage = 1; render(); });
+  ['ct-search', 'ct-esito', 'ct-comune', 'ct-provincia', 'ct-cap', 'ct-offerto', 'ct-parentela', 'ct-geo'].forEach(id => $('#' + id).oninput = () => { contactsPage = 1; render(); });
+  $('#ct-reset').onclick = () => {
+    ['ct-search', 'ct-cap'].forEach(id => $('#' + id).value = '');
+    ['ct-esito', 'ct-comune', 'ct-provincia', 'ct-offerto', 'ct-parentela', 'ct-geo'].forEach(id => $('#' + id).selectedIndex = 0);
+    contactsPage = 1; render();
+  };
   $('#ct-new').onclick = () => contactForm(null, render);
   if (isAdmin) {
     $('#ct-import').onclick = () => importCsv(render);
