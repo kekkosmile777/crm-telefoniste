@@ -468,6 +468,7 @@ async function viewContatti() {
           <td>${esc(c.provincia || '')}</td><td>${esc(c.cap || '')}</td>
           <td>${esc(c.offerto_da || '')}</td><td>${esc(c.parentela || '')}</td><td>${tag(c.esito)}${c.lat == null ? ' <span class="tag red" title="Non geolocalizzato">⚠</span>' : ''}</td>
           <td style="white-space:nowrap">
+            <button class="btn success" data-call-ct="${c.id}" title="Chiama subito">📞</button>
             <button class="btn" data-view-ct="${c.id}">👁</button>
             <button class="btn" data-edit-ct="${c.id}">✏️</button>
             ${isAdmin ? `<button class="btn danger" data-del-ct="${c.id}">🗑</button>` : ''}
@@ -482,6 +483,13 @@ async function viewContatti() {
     $('#pg-next').onclick = () => { contactsPage++; render(); };
     $('#ct-table-wrap').querySelectorAll('[data-edit-ct]').forEach(b => b.onclick = () => contactForm(d.rows.find(c => c.id == b.dataset.editCt), render));
     $('#ct-table-wrap').querySelectorAll('[data-view-ct]').forEach(b => b.onclick = () => contactDetail(b.dataset.viewCt));
+    $('#ct-table-wrap').querySelectorAll('[data-call-ct]').forEach(b => b.onclick = () => {
+      const c = d.rows.find(x => x.id == b.dataset.callCt);
+      if (!c) return;
+      if (WS.callId) return toast('Chiudi prima la chiamata in corso', true);
+      WS.pendingCall = c;
+      go('telefono');
+    });
     $('#ct-table-wrap').querySelectorAll('[data-del-ct]').forEach(b => b.onclick = async () => {
       if (!confirm('Eliminare il contatto e tutto il suo storico?')) return;
       await api('/contacts/' + b.dataset.delCt, { method: 'DELETE' }); toast('Contatto eliminato'); render();
@@ -1478,6 +1486,14 @@ async function viewTelefono() {
     </div>`;
 
   const input = $('#dial-num');
+  if (WS.pendingCall) {
+    const c = WS.pendingCall;
+    WS.pendingCall = null;
+    input.value = c.telefono;
+    WS.current = { tipo: 'manuale', campaign_id: null, contact: c };
+    renderContact();
+    setTimeout(() => startCall(), 300);
+  }
   $('#view').querySelectorAll('.dial-key').forEach(b => b.onclick = () => { input.value += b.dataset.k; });
   $('#dial-back').onclick = () => { input.value = input.value.slice(0, -1); };
   $('#dial-clear').onclick = () => { input.value = ''; };
