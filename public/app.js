@@ -218,6 +218,7 @@ async function viewCampagne() {
         <td>${fmtDT(c.created_at)}</td>
         <td style="white-space:nowrap">
           <button class="btn" data-open="${c.id}">👥 Contatti</button>
+          <button class="btn" data-map="${c.id}" title="Mappa contatti da chiamare">🗺</button>
           <button class="btn" data-edit="${c.id}">✏️</button>
           ${c.stato === 'attiva'
             ? `<button class="btn" data-stato="${c.id}|in_pausa">⏸</button>`
@@ -230,6 +231,10 @@ async function viewCampagne() {
   $('#btn-new-camp').onclick = () => campaignForm();
   $('#view').querySelectorAll('[data-edit]').forEach(b => b.onclick = () => campaignForm(rows.find(c => c.id == b.dataset.edit)));
   $('#view').querySelectorAll('[data-open]').forEach(b => b.onclick = () => campaignContacts(rows.find(c => c.id == b.dataset.open)));
+  $('#view').querySelectorAll('[data-map]').forEach(b => b.onclick = () => {
+    const c = rows.find(x => x.id == b.dataset.map);
+    openMapAdmin(c.id, c.nome);
+  });
   $('#view').querySelectorAll('[data-stato]').forEach(b => b.onclick = async () => {
     const [id, stato] = b.dataset.stato.split('|');
     await api(`/admin/campaigns/${id}`, { method: 'PUT', body: { stato } });
@@ -1454,6 +1459,41 @@ async function viewCampagneOp() {
     if (!WS.geoCenter || WS.geoCenter.campaign != WS.selectedCampaign) WS.geoCenter = null;
     go('postazione');
   });
+}
+
+/* ---------- MAPPA CAMPAGNA (admin, sola visualizzazione) ---------- */
+async function openMapAdmin(campId, nomeCampagna) {
+  try {
+    await loadLeaflet();
+    const d = await api(`/op/campaigns/${campId}/geo-points`);
+    const groups = new Map();
+    d.points.forEach(p => {
+      const k = p.lat.toFixed(4) + ',' + p.lng.toFixed(4);
+      if (!groups.has(k)) groups.set(k, { lat: p.lat, lng: p.lng, comune: p.comune || '', n: 0 });
+      const g = groups.get(k);
+      g.n++;
+      if (!g.comune && p.comune) g.comune = p.comune;
+    });
+    openModal(`\uD83D\uDDFA Mappa — ${esc(nomeCampagna)}`, `
+      <p class="muted" style="margin-bottom:8px"><b>${d.points.length}</b> contatti da chiamare in <b>${groups.size}</b> zone${d.senza_posizione ? ` · <span class="tag red">\u26A0 ${d.senza_posizione} senza posizione</span>` : ''}</p>
+      <div id="geo-map" style="height:460px; border-radius:10px"></div>
+      <div class="modal-actions"><button class="btn" onclick="closeModal()">Chiudi</button></div>`);
+    if (!d.points.length) { $('#geo-map').innerHTML = '<p class="muted" style="padding:20px">Nessun contatto geolocalizzato da chiamare in questa campagna.</p>'; return; }
+    setTimeout(() => {
+      const map = L.map('geo-map');
+      L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; OpenStreetMap' }).addTo(map);
+      const bounds = [];
+      for (const g of groups.values()) {
+        bounds.push([g.lat, g.lng]);
+        const size = Math.round(Math.max(28, Math.min(54, 22 + Math.sqrt(g.n) * 3.5)));
+        const icon = L.divIcon({ className: '', iconSize: [size, size], iconAnchor: [size / 2, size / 2],
+          html: `<div class="geo-bubble" style="width:${size}px;height:${size}px;line-height:${size - 4}px">${g.n}</div>` });
+        L.marker([g.lat, g.lng], { icon }).addTo(map)
+          .bindTooltip(`${esc(g.comune || 'Zona')} — ${g.n} contatt${g.n === 1 ? 'o' : 'i'}`);
+      }
+      map.fitBounds(bounds, { padding: [30, 30] });
+    }, 60);
+  } catch (e) { toast(e.message, true); }
 }
 
 /* ---------- registry ---------- */
