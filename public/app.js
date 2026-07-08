@@ -1078,8 +1078,8 @@ async function openGeoMap() {
     await loadLeaflet();
     const d = await api(`/op/campaigns/${WS.selectedCampaign}/geo-points`);
     openModal('\uD83D\uDCCD Scegli la posizione di partenza', `
-      <p class="muted" style="margin-bottom:8px">${d.points.length} contatti da chiamare sulla mappa${d.senza_posizione ? ` (+${d.senza_posizione} senza posizione, esclusi)` : ''}.
-      Clicca un puntino: la coda proseguirà per vicinanza entro <b>${raggio} km</b>.</p>
+      <p class="muted" style="margin-bottom:8px">${d.points.length} contatti da chiamare${d.senza_posizione ? ` (+${d.senza_posizione} senza posizione, esclusi)` : ''}.
+      Ogni cerchio è una zona con il <b>numero di contatti</b>: cliccane uno e la coda proseguirà per vicinanza entro <b>${raggio} km</b>.</p>
       <div id="geo-map" style="height:440px; border-radius:10px"></div>
       <div class="modal-actions">
         <span id="geo-sel" class="muted" style="margin-right:auto">Nessun punto selezionato</span>
@@ -1090,24 +1090,36 @@ async function openGeoMap() {
     setTimeout(() => {
       const map = L.map('geo-map');
       L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; OpenStreetMap' }).addTo(map);
+      // raggruppo per zona (stesse coordinate = stesso comune): una bolla col conteggio
+      const groups = new Map();
+      d.points.forEach(p => {
+        const k = p.lat.toFixed(4) + ',' + p.lng.toFixed(4);
+        if (!groups.has(k)) groups.set(k, { lat: p.lat, lng: p.lng, comune: p.comune || '', n: 0 });
+        const g = groups.get(k);
+        g.n++;
+        if (!g.comune && p.comune) g.comune = p.comune;
+      });
       const bounds = [];
       let sel = null, circle = null;
-      d.points.forEach(p => {
-        bounds.push([p.lat, p.lng]);
-        const m = L.circleMarker([p.lat, p.lng], { radius: 6, color: '#7c5cff', fillColor: '#7c5cff', fillOpacity: .75, weight: 1 });
-        m.addTo(map).bindTooltip(`${esc(p.nome || '')} ${esc(p.cognome || '')} — ${esc(p.comune || '')}`);
+      for (const g of groups.values()) {
+        bounds.push([g.lat, g.lng]);
+        const size = Math.round(Math.max(28, Math.min(54, 22 + Math.sqrt(g.n) * 3.5)));
+        const icon = L.divIcon({ className: '', iconSize: [size, size], iconAnchor: [size / 2, size / 2],
+          html: `<div class="geo-bubble" style="width:${size}px;height:${size}px;line-height:${size - 4}px">${g.n}</div>` });
+        const m = L.marker([g.lat, g.lng], { icon });
+        m.addTo(map).bindTooltip(`${esc(g.comune || 'Zona')} — ${g.n} contatt${g.n === 1 ? 'o' : 'i'}`);
         m.on('click', () => {
-          sel = p;
+          sel = g;
           if (circle) circle.remove();
-          circle = L.circle([p.lat, p.lng], { radius: raggio * 1000, color: '#22a35c', fillOpacity: .08 }).addTo(map);
-          $('#geo-sel').textContent = `Partenza: ${p.nome || ''} ${p.cognome || ''} (${p.comune || '—'})`;
+          circle = L.circle([g.lat, g.lng], { radius: raggio * 1000, color: '#22a35c', fillOpacity: .08 }).addTo(map);
+          $('#geo-sel').textContent = `Partenza: ${g.comune || 'zona'} (${g.n} contatti nella zona)`;
           $('#geo-start').disabled = false;
         });
-      });
+      }
       map.fitBounds(bounds, { padding: [30, 30] });
       $('#geo-start').onclick = () => {
         if (!sel) return;
-        WS.geoCenter = { lat: sel.lat, lng: sel.lng, label: sel.comune || (sel.nome + ' ' + (sel.cognome || '')), campaign: WS.selectedCampaign };
+        WS.geoCenter = { lat: sel.lat, lng: sel.lng, label: sel.comune || 'zona scelta', campaign: WS.selectedCampaign };
         closeModal();
         toast(`Zona impostata: ${WS.geoCenter.label} — raggio ${raggio} km`);
         const bar = $('#ws-geo-label'); if (bar) bar.textContent = `Zona attiva: ${WS.geoCenter.label} (raggio ${raggio} km)`;
