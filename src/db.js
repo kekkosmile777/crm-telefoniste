@@ -127,6 +127,8 @@ CREATE TABLE IF NOT EXISTS settings (
 for (const sql of [
   "ALTER TABLE contacts ADD COLUMN lat REAL",
   "ALTER TABLE contacts ADD COLUMN lng REAL",
+  "ALTER TABLE contacts ADD COLUMN provincia TEXT",
+  "ALTER TABLE contacts ADD COLUMN cap TEXT",
   "ALTER TABLE campaigns ADD COLUMN tipo TEXT NOT NULL DEFAULT 'manuale'",
   "ALTER TABLE campaigns ADD COLUMN raggio_km INTEGER NOT NULL DEFAULT 25"
 ]) { try { db.exec(sql); } catch {} }

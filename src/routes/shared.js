@@ -2,6 +2,7 @@
 const express = require('express');
 const db = require('../db');
 const { requireAdmin } = require('../auth');
+const { geocode } = require('../geocode');
 const router = express.Router();
 
 const ESITI = ['da_chiamare','in_chiamata','appuntamento_fissato','richiamo','non_interessato','non_risponde','segreteria','occupato','numero_errato','gia_fatto','blacklist','irraggiungibile','fuori_zona'];
@@ -38,20 +39,23 @@ router.get('/contacts/:id', (req, res) => {
 });
 
 router.post('/contacts', (req, res) => {
-  const { nome, cognome, telefono, comune, offerto_da, parentela, esito, note } = req.body;
+  const { nome, cognome, telefono, comune, provincia, cap, offerto_da, parentela, esito, note } = req.body;
   if (!nome || !telefono) return res.status(400).json({ error: 'Nome e telefono obbligatori' });
-  const r = db.prepare(`INSERT INTO contacts (nome, cognome, telefono, comune, offerto_da, parentela, esito, note)
-    VALUES (?,?,?,?,?,?,?,?)`).run(nome, cognome || '', telefono, comune || '', offerto_da || '', parentela || '', ESITI.includes(esito) ? esito : 'da_chiamare', note || '');
+  const g = geocode({ comune, provincia, cap });
+  const r = db.prepare(`INSERT INTO contacts (nome, cognome, telefono, comune, provincia, cap, offerto_da, parentela, esito, note, lat, lng)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).run(nome, cognome || '', telefono, comune || '', (provincia || '').toUpperCase(), cap || '', offerto_da || '', parentela || '', ESITI.includes(esito) ? esito : 'da_chiamare', note || '', g ? g.lat : null, g ? g.lng : null);
   res.json(db.prepare('SELECT * FROM contacts WHERE id = ?').get(r.lastInsertRowid));
 });
 
 router.put('/contacts/:id', (req, res) => {
   const c = db.prepare('SELECT * FROM contacts WHERE id = ?').get(req.params.id);
   if (!c) return res.status(404).json({ error: 'Contatto non trovato' });
-  const { nome, cognome, telefono, comune, offerto_da, parentela, esito, note } = req.body;
-  db.prepare(`UPDATE contacts SET nome=?, cognome=?, telefono=?, comune=?, offerto_da=?, parentela=?, esito=?, note=?, updated_at=datetime('now') WHERE id=?`)
-    .run(nome ?? c.nome, cognome ?? c.cognome, telefono ?? c.telefono, comune ?? c.comune, offerto_da ?? c.offerto_da,
-         parentela ?? c.parentela, ESITI.includes(esito) ? esito : c.esito, note ?? c.note, req.params.id);
+  const { nome, cognome, telefono, comune, provincia, cap, offerto_da, parentela, esito, note } = req.body;
+  const newComune = comune ?? c.comune, newProv = (provincia ?? c.provincia) || '', newCap = (cap ?? c.cap) || '';
+  const g = geocode({ comune: newComune, provincia: newProv, cap: newCap });
+  db.prepare(`UPDATE contacts SET nome=?, cognome=?, telefono=?, comune=?, provincia=?, cap=?, offerto_da=?, parentela=?, esito=?, note=?, lat=?, lng=?, updated_at=datetime('now') WHERE id=?`)
+    .run(nome ?? c.nome, cognome ?? c.cognome, telefono ?? c.telefono, newComune, newProv.toUpperCase(), newCap, offerto_da ?? c.offerto_da,
+         parentela ?? c.parentela, ESITI.includes(esito) ? esito : c.esito, note ?? c.note, g ? g.lat : null, g ? g.lng : null, req.params.id);
   res.json(db.prepare('SELECT * FROM contacts WHERE id = ?').get(req.params.id));
 });
 
@@ -75,18 +79,52 @@ router.post('/contacts/import', requireAdmin, (req, res) => {
   if (!Array.isArray(rows)) return res.status(400).json({ error: 'rows mancante' });
   let inseriti = 0, saltati = 0;
   const exists = db.prepare('SELECT id FROM contacts WHERE telefono = ?');
-  const ins = db.prepare(`INSERT INTO contacts (nome, cognome, telefono, comune, offerto_da, parentela, lat, lng) VALUES (?,?,?,?,?,?,?,?)`);
-  const num = v => { const f = parseFloat(String(v || '').replace(',', '.')); return isFinite(f) && f !== 0 ? f : null; };
+  const ins = db.prepare(`INSERT INTO contacts (nome, cognome, telefono, comune, provincia, cap, offerto_da, parentela, lat, lng) VALUES (?,?,?,?,?,?,?,?,?,?)`);
+  let geoOk = 0, geoNo = 0;
   const tx = db.transaction(() => {
     for (const r of rows) {
       if (!r.nome || !r.telefono) { saltati++; continue; }
       if (exists.get(String(r.telefono).trim())) { saltati++; continue; }
-      ins.run(r.nome.trim(), (r.cognome || '').trim(), String(r.telefono).trim(), (r.comune || '').trim(), (r.offerto_da || '').trim(), (r.parentela || '').trim(), num(r.lat), num(r.lng));
+      const g = geocode({ comune: r.comune, provincia: r.provincia, cap: r.cap });
+      if (g) geoOk++; else geoNo++;
+      ins.run(r.nome.trim(), (r.cognome || '').trim(), String(r.telefono).trim(), (r.comune || '').trim(),
+        String(r.provincia || '').trim().toUpperCase(), String(r.cap || '').trim(),
+        (r.offerto_da || '').trim(), (r.parentela || '').trim(), g ? g.lat : null, g ? g.lng : null);
       inseriti++;
     }
   });
   tx();
-  res.json({ ok: true, inseriti, saltati });
+  res.json({ ok: true, inseriti, saltati, geolocalizzati: geoOk, non_geolocalizzati: geoNo });
+});
+
+// Modifica multipla (admin): applica comune/provincia/cap a piu' contatti e ri-geolocalizza
+router.post('/contacts/bulk-update', requireAdmin, (req, res) => {
+  const { ids, fields } = req.body;
+  if (!Array.isArray(ids) || !ids.length || !fields) return res.status(400).json({ error: 'Parametri non validi' });
+  const get = db.prepare('SELECT * FROM contacts WHERE id=?');
+  const upd = db.prepare(`UPDATE contacts SET comune=?, provincia=?, cap=?, lat=?, lng=?, updated_at=datetime('now') WHERE id=?`);
+  let geoOk = 0, geoNo = 0;
+  const tx = db.transaction(() => {
+    for (const id of ids) {
+      const c = get.get(id);
+      if (!c) continue;
+      const comune = fields.comune !== undefined && fields.comune !== '' ? fields.comune : c.comune;
+      const provincia = (fields.provincia !== undefined && fields.provincia !== '' ? fields.provincia : c.provincia) || '';
+      const cap = (fields.cap !== undefined && fields.cap !== '' ? fields.cap : c.cap) || '';
+      const g = geocode({ comune, provincia, cap });
+      if (g) geoOk++; else geoNo++;
+      upd.run(comune, provincia.toUpperCase(), cap, g ? g.lat : null, g ? g.lng : null, id);
+    }
+  });
+  tx();
+  res.json({ ok: true, aggiornati: ids.length, geolocalizzati: geoOk, non_geolocalizzati: geoNo });
+});
+
+// Elimina TUTTI i contatti (admin) - usato per ripartire da zero
+router.post('/contacts/delete-all', requireAdmin, (req, res) => {
+  const n = db.prepare('SELECT COUNT(*) n FROM contacts').get().n;
+  db.prepare('DELETE FROM contacts').run();
+  res.json({ ok: true, eliminati: n });
 });
 
 // Aggiorna coordinate in blocco (admin) - match per telefono

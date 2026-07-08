@@ -280,35 +280,41 @@ function campaignForm(c = null) {
 }
 
 /* Gestione contatti dentro una campagna */
-async function campaignContacts(camp) {
-  const [inCamp, users] = await Promise.all([
+async function campaignContacts(camp, soloNonGeo = false) {
+  const [inCampAll, users] = await Promise.all([
     api(`/admin/campaigns/${camp.id}/contacts`),
     api('/admin/users')
   ]);
+  const nonGeoCount = inCampAll.filter(r => r.lat == null).length;
+  const inCamp = soloNonGeo ? inCampAll.filter(r => r.lat == null) : inCampAll;
   const ops = users.filter(u => u.ruolo === 'operatore' && u.attivo);
   $('#view').innerHTML = `
     <h2 class="page-title">Campagna: <em>${esc(camp.nome)}</em></h2>
     <div class="toolbar">
       <button class="btn" id="back-camp">← Campagne</button>
       <button class="btn primary" id="btn-add-cc">➕ Aggiungi contatti</button>
-      <span class="muted">${inCamp.length} contatti in campagna · modalità: <b>${camp.modalita === 'coda' ? 'coda automatica' : 'liste assegnate'}</b></span>
+      <span class="muted">${inCamp.length} contatti · <b>${camp.modalita === 'coda' ? 'coda automatica' : 'liste assegnate'}</b></span>
+      <button class="btn ${soloNonGeo ? 'danger' : ''}" id="btn-nongeo">⚠ Non geolocalizzati (${nonGeoCount})${soloNonGeo ? ' ✕' : ''}</button>
       <span class="spacer"></span>
       <span id="cc-selinfo" class="muted">0 selezionati</span>
       ${camp.modalita === 'assegnata' ? `
         <select id="cc-assign-user"><option value="">— assegna a —</option>${ops.map(o => `<option value="${o.id}">${esc(o.nome)}</option>`).join('')}</select>
         <button class="btn" id="btn-assign">Assegna</button>` : ''}
+      <button class="btn primary" id="btn-bulk-edit">✏️ Modifica selezionati</button>
       <button class="btn" id="btn-requeue">↩ Rimetti in coda</button>
       <button class="btn danger" id="btn-remove-cc">➖ Rimuovi</button>
     </div>
     <div class="table-wrap"><table>
-      <tr><th class="checkbox-cell"><input type="checkbox" id="cc-all"></th><th>Nome</th><th>Telefono</th><th>Comune</th><th>Stato coda</th><th>Esito</th><th>Tent.</th><th>Assegnato a</th></tr>
+      <tr><th class="checkbox-cell"><input type="checkbox" id="cc-all"></th><th>Nome</th><th>Telefono</th><th>Comune</th><th>Prov</th><th>CAP</th><th>Posizione</th><th>Stato coda</th><th>Esito</th><th>Tent.</th><th>Assegnato a</th></tr>
       ${inCamp.map(r => `<tr>
         <td><input type="checkbox" class="cc-check" value="${r.id}"></td>
         <td>${esc(nomeCompleto(r))}</td><td>${esc(r.telefono)}</td><td>${esc(r.comune || '')}</td>
+        <td>${esc(r.provincia || '')}</td><td>${esc(r.cap || '')}</td>
+        <td>${r.lat != null ? '<span class="tag green">✓</span>' : '<span class="tag red">⚠ no geo</span>'}</td>
         <td><span class="tag ${r.cc_stato === 'da_chiamare' ? 'gray' : r.cc_stato === 'lavorato' ? 'green' : 'orange'}">${r.cc_stato.replace('_', ' ')}</span></td>
         <td>${r.cc_esito ? tag(r.cc_esito) : '—'}</td><td>${r.tentativi}</td>
         <td>${esc(r.assegnato_a || '—')}</td>
-      </tr>`).join('') || '<tr><td colspan="8" class="muted">Nessun contatto in campagna</td></tr>'}
+      </tr>`).join('') || '<tr><td colspan="11" class="muted">Nessun contatto</td></tr>'}
     </table></div>`;
 
   const selected = () => [...$('#view').querySelectorAll('.cc-check:checked')].map(c => parseInt(c.value));
@@ -316,23 +322,48 @@ async function campaignContacts(camp) {
   $('#view').querySelectorAll('.cc-check').forEach(c => c.onchange = updateSel);
   $('#cc-all').onchange = e => { $('#view').querySelectorAll('.cc-check').forEach(c => c.checked = e.target.checked); updateSel(); };
   $('#back-camp').onclick = () => viewCampagne();
+  $('#btn-nongeo').onclick = () => campaignContacts(camp, !soloNonGeo);
+  $('#btn-bulk-edit').onclick = () => {
+    const ids = selected(); if (!ids.length) return toast('Seleziona dei contatti', true);
+    openModal(`Modifica ${ids.length} contatti insieme`, `
+      <p class="muted">Compila solo i campi da cambiare: verranno applicati a tutti i selezionati e la posizione verrà ricalcolata da comune + provincia + CAP.</p>
+      <div class="form-grid">
+        <div class="full"><label>Comune</label><input id="be-comune" style="width:100%" placeholder="(invariato)"></div>
+        <div><label>Provincia (sigla)</label><input id="be-prov" maxlength="2" style="width:100%" placeholder="(invariata)"></div>
+        <div><label>CAP</label><input id="be-cap" maxlength="5" style="width:100%" placeholder="(invariato)"></div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" onclick="closeModal()">Annulla</button>
+        <button class="btn primary" id="be-save">💾 Applica a ${ids.length} contatti</button>
+      </div>`);
+    $('#be-save').onclick = async () => {
+      const fields = { comune: $('#be-comune').value.trim(), provincia: $('#be-prov').value.trim(), cap: $('#be-cap').value.trim() };
+      if (!fields.comune && !fields.provincia && !fields.cap) return toast('Compila almeno un campo', true);
+      try {
+        const r = await api('/contacts/bulk-update', { method: 'POST', body: { ids, fields } });
+        closeModal();
+        toast(`${r.aggiornati} aggiornati: ${r.geolocalizzati} geolocalizzati, ${r.non_geolocalizzati} ancora senza posizione`);
+        campaignContacts(camp, soloNonGeo);
+      } catch (e) { toast(e.message, true); }
+    };
+  };
   $('#btn-add-cc').onclick = () => addContactsToCampaign(camp);
   $('#btn-remove-cc').onclick = async () => {
     const ids = selected(); if (!ids.length) return toast('Seleziona dei contatti', true);
     await api(`/admin/campaigns/${camp.id}/contacts/remove`, { method: 'POST', body: { contact_ids: ids } });
-    toast('Contatti rimossi'); campaignContacts(camp);
+    toast('Contatti rimossi'); campaignContacts(camp, soloNonGeo);
   };
   $('#btn-requeue').onclick = async () => {
     const ids = selected(); if (!ids.length) return toast('Seleziona dei contatti', true);
     await api(`/admin/campaigns/${camp.id}/requeue`, { method: 'POST', body: { contact_ids: ids } });
-    toast('Rimessi in coda'); campaignContacts(camp);
+    toast('Rimessi in coda'); campaignContacts(camp, soloNonGeo);
   };
   const ba = $('#btn-assign');
   if (ba) ba.onclick = async () => {
     const ids = selected(); if (!ids.length) return toast('Seleziona dei contatti', true);
     const uid = $('#cc-assign-user').value || null;
     await api(`/admin/campaigns/${camp.id}/assign`, { method: 'POST', body: { contact_ids: ids, user_id: uid ? parseInt(uid) : null } });
-    toast(uid ? 'Contatti assegnati' : 'Assegnazione rimossa'); campaignContacts(camp);
+    toast(uid ? 'Contatti assegnati' : 'Assegnazione rimossa'); campaignContacts(camp, soloNonGeo);
   };
 }
 
@@ -397,7 +428,7 @@ async function viewContatti() {
         <tr><th>Nome</th><th>Telefono</th><th>Comune</th><th>Offerto da</th><th>Parentela</th><th>Esito</th><th>Azioni</th></tr>
         ${d.rows.map(c => `<tr>
           <td><b>${esc(nomeCompleto(c))}</b></td><td>${esc(c.telefono)}</td><td>${esc(c.comune || '')}</td>
-          <td>${esc(c.offerto_da || '')}</td><td>${esc(c.parentela || '')}</td><td>${tag(c.esito)}</td>
+          <td>${esc(c.offerto_da || '')}</td><td>${esc(c.parentela || '')}</td><td>${tag(c.esito)}${c.lat == null ? ' <span class="tag red" title="Non geolocalizzato">⚠</span>' : ''}</td>
           <td style="white-space:nowrap">
             <button class="btn" data-view-ct="${c.id}">👁</button>
             <button class="btn" data-edit-ct="${c.id}">✏️</button>
@@ -440,6 +471,8 @@ function contactForm(c, onSave) {
       <div><label>Cognome</label><input id="cf2-cognome" style="width:100%" value="${esc(c?.cognome || '')}"></div>
       <div><label>Telefono *</label><input id="cf2-tel" style="width:100%" value="${esc(c?.telefono || '')}"></div>
       <div><label>Comune</label><input id="cf2-comune" style="width:100%" value="${esc(c?.comune || '')}"></div>
+      <div><label>Provincia (sigla)</label><input id="cf2-prov" maxlength="2" style="width:100%" value="${esc(c?.provincia || '')}"></div>
+      <div><label>CAP</label><input id="cf2-cap" maxlength="5" style="width:100%" value="${esc(c?.cap || '')}"></div>
       <div><label>Offerto da</label><input id="cf2-off" style="width:100%" value="${esc(c?.offerto_da || '')}"></div>
       <div><label>Parentela</label><input id="cf2-par" style="width:100%" value="${esc(c?.parentela || '')}"></div>
       <div class="full"><label>Esito</label>
@@ -451,7 +484,7 @@ function contactForm(c, onSave) {
       <button class="btn primary" id="cf2-save">💾 Salva</button>
     </div>`);
   $('#cf2-save').onclick = async () => {
-    const body = { nome: $('#cf2-nome').value.trim(), cognome: $('#cf2-cognome').value.trim(), telefono: $('#cf2-tel').value.trim(), comune: $('#cf2-comune').value.trim(), offerto_da: $('#cf2-off').value.trim(), parentela: $('#cf2-par').value.trim(), esito: $('#cf2-esito').value, note: $('#cf2-note').value };
+    const body = { nome: $('#cf2-nome').value.trim(), cognome: $('#cf2-cognome').value.trim(), telefono: $('#cf2-tel').value.trim(), comune: $('#cf2-comune').value.trim(), provincia: $('#cf2-prov').value.trim(), cap: $('#cf2-cap').value.trim(), offerto_da: $('#cf2-off').value.trim(), parentela: $('#cf2-par').value.trim(), esito: $('#cf2-esito').value, note: $('#cf2-note').value };
     if (!body.nome || !body.telefono) return toast('Nome e telefono obbligatori', true);
     try {
       if (c) await api('/contacts/' + c.id, { method: 'PUT', body });
@@ -506,8 +539,8 @@ const CSV_HEADER_MAP = {
   comune: ['comune', 'comune codice istat anagrafica', 'città', 'citta', 'city'],
   offerto_da: ['offerto_da', 'offerto da'],
   parentela: ['parentela', 'grado parentela'],
-  lat: ['lat', 'latitudine', 'latitudine anagrafica', 'latitude'],
-  lng: ['lng', 'lon', 'longitudine', 'longitudine anagrafica', 'longitude']
+  provincia: ['provincia', 'provincia anagrafica', 'prov', 'sigla provincia'],
+  cap: ['cap', 'cap anagrafica', 'codice postale', 'postal code']
 };
 
 function importCsv(onDone) {
@@ -548,7 +581,7 @@ function importCsv(onDone) {
         const nome = pick(r, 'nome'), cognome = pick(r, 'cognome');
         let tel = pick(r, 'telefono').replace(/[^+0-9]/g, '');
         if (!tel || (!nome && !cognome)) { scartate++; continue; }
-        rows.push({ nome: nome || cognome, cognome: nome ? cognome : '', telefono: tel, comune: pick(r, 'comune'), offerto_da: pick(r, 'offerto_da'), parentela: pick(r, 'parentela'), lat: pick(r, 'lat'), lng: pick(r, 'lng') });
+        rows.push({ nome: nome || cognome, cognome: nome ? cognome : '', telefono: tel, comune: pick(r, 'comune'), offerto_da: pick(r, 'offerto_da'), parentela: pick(r, 'parentela'), provincia: pick(r, 'provincia'), cap: pick(r, 'cap') });
       }
       $('#csv-preview').innerHTML = `<p><b>${rows.length}</b> contatti pronti${scartate ? ` (<b>${scartate}</b> righe scartate: senza telefono o nome)` : ''}. Anteprima:</p>
         <div class="table-wrap" style="max-height:180px"><table>
@@ -562,7 +595,7 @@ function importCsv(onDone) {
   $('#csv-go').onclick = async () => {
     $('#csv-go').disabled = true;
     const r = await api('/contacts/import', { method: 'POST', body: { rows } });
-    closeModal(); toast(`Importati ${r.inseriti} contatti (${r.saltati} già presenti o scartati)`); onDone && onDone();
+    closeModal(); toast(`Importati ${r.inseriti} contatti: ${r.geolocalizzati ?? 0} geolocalizzati, ${r.non_geolocalizzati ?? 0} non geolocalizzati (${r.saltati} già presenti o scartati)`); onDone && onDone();
   };
 }
 
