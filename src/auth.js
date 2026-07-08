@@ -12,7 +12,9 @@ function login(username, password) {
 }
 
 function publicUser(u) {
-  return { id: u.id, username: u.username, nome: u.nome, ruolo: u.ruolo, attivo: u.attivo };
+  let permessi = null;
+  try { if (u.permessi) permessi = JSON.parse(u.permessi); } catch {}
+  return { id: u.id, username: u.username, nome: u.nome, ruolo: u.ruolo, attivo: u.attivo, permessi };
 }
 
 function requireAuth(req, res, next) {

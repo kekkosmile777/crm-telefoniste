@@ -148,3 +148,7 @@ tr:hover td { background: #f8f7fd; }
 /* BOLLE MAPPA GEOLOCALIZZATA */
 .geo-bubble { background: var(--accent); color: #fff; border-radius: 50%; text-align: center; font-weight: 700; font-size: 13px; border: 2px solid #fff; box-shadow: 0 2px 10px rgba(0,0,0,.35); cursor: pointer; }
 .geo-bubble:hover { background: var(--accent-dark); }
+
+/* GRIGLIA PERMESSI UTENTE */
+.perms-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px; }
+.perm-item { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 13px; color: var(--text); }

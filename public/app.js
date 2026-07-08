@@ -125,21 +125,36 @@ const NAV_OP = [
   { id: 'contatti', icon: '👤', label: 'Contatti' },
 ];
 
+const FEATURES_ADMIN = [
+  ['dashboard', 'Dashboard'], ['monitor', 'Monitor live'], ['campagne', 'Campagne'], ['registro', 'Registro chiamate'],
+  ['telefono', 'Telefono'], ['contatti', 'Contatti'], ['richiami', 'Richiami'], ['appuntamenti', 'Appuntamenti'],
+  ['report', 'Report'], ['operatrici', 'Utenti'], ['agenti', 'Agenti'], ['impostazioni', 'Impostazioni']
+];
+const FEATURES_OP = [
+  ['postazione', 'Postazione'], ['campagne-op', 'Campagne'], ['telefono', 'Telefono'],
+  ['richiami-op', 'I miei richiami'], ['chiamate-op', 'Le mie chiamate'], ['appuntamenti-op', 'I miei appuntamenti'], ['contatti', 'Contatti']
+];
+function hasPerm(id) { return !USER?.permessi || USER.permessi.includes(id); }
+
 function showApp() {
   $('#login-screen').classList.add('hidden');
   $('#app').classList.remove('hidden');
   $('#user-name').textContent = USER.nome;
   $('#user-role').textContent = USER.ruolo === 'admin' ? 'Admin' : 'Operatrice';
-  const nav = USER.ruolo === 'admin' ? NAV_ADMIN : NAV_OP;
-  $('#nav').innerHTML = nav.map(n => n.sect
+  const items = (USER.ruolo === 'admin' ? NAV_ADMIN : NAV_OP).filter(n => n.sect || hasPerm(n.id));
+  const cleaned = items.filter((n, i) => !n.sect || (items[i + 1] && !items[i + 1].sect));
+  $('#nav').innerHTML = cleaned.map(n => n.sect
     ? `<div class="nav-section">${n.sect}</div>`
     : `<a href="#" data-view="${n.id}">${n.icon} <span class="txt">${n.label}</span></a>`).join('');
   $('#nav').querySelectorAll('a').forEach(a => a.onclick = e => { e.preventDefault(); go(a.dataset.view); });
   if (USER.ruolo === 'operatore') startHeartbeat();
-  go(USER.ruolo === 'admin' ? 'dashboard' : 'postazione');
+  const first = cleaned.find(n => !n.sect);
+  if (first) go(first.id);
+  else $('#view').innerHTML = '<p class="muted" style="padding:30px">Nessuna funzione abilitata per il tuo utente: contatta l\'amministratore.</p>';
 }
 
 function go(view) {
+  if (!hasPerm(view)) { toast('Funzione non abilitata per il tuo utente', true); return; }
   CURRENT_VIEW = view;
   clearInterval(REFRESH_TIMER);
   $('#nav').querySelectorAll('a').forEach(a => a.classList.toggle('active', a.dataset.view === view));
@@ -819,10 +834,11 @@ async function viewOperatrici() {
     <h2 class="page-title">Gestione <em>Utenti</em></h2>
     <div class="toolbar"><button class="btn primary" id="u-new">+ Nuovo utente</button></div>
     <div class="table-wrap"><table>
-      <tr><th>Nome</th><th>Username</th><th>Ruolo</th><th>Stato</th><th>Creato</th><th>Azioni</th></tr>
+      <tr><th>Nome</th><th>Username</th><th>Ruolo</th><th>Funzioni</th><th>Stato</th><th>Creato</th><th>Azioni</th></tr>
       ${rows.map(u => `<tr>
         <td><b>${esc(u.nome)}</b></td><td>${esc(u.username)}</td>
         <td><span class="tag ${u.ruolo === 'admin' ? '' : 'green'}">${u.ruolo === 'admin' ? 'Admin' : 'Operatrice'}</span></td>
+        <td>${u.permessi ? `<span class="tag orange">${u.permessi.length} abilitate</span>` : '<span class="tag green">tutte</span>'}</td>
         <td>${u.attivo ? '<span class="tag green">attivo</span>' : '<span class="tag red">disattivato</span>'}</td>
         <td>${fmtDT(u.created_at)}</td>
         <td style="white-space:nowrap">
@@ -850,18 +866,46 @@ function userForm(u) {
         <option value="admin" ${u?.ruolo === 'admin' ? 'selected' : ''}>Amministratore</option>
       </select></div>
     </div>
+    <label style="margin-top:14px">Funzioni abilitate</label>
+    <div class="toolbar" style="margin-bottom:6px">
+      <button class="btn" id="uf-all" type="button">✓ Tutte</button>
+      <button class="btn" id="uf-none" type="button">✗ Nessuna</button>
+    </div>
+    <div id="uf-perms" class="perms-grid"></div>
     <div class="modal-actions">
       <button class="btn" onclick="closeModal()">Annulla</button>
       <button class="btn primary" id="uf-save">💾 Salva</button>
     </div>`);
+
+  const isSelf = u && u.id === USER.id;
+  function renderPerms() {
+    const ruolo = $('#uf-ruolo').value;
+    const feats = ruolo === 'admin' ? FEATURES_ADMIN : FEATURES_OP;
+    const cur = (u && u.ruolo === ruolo) ? u.permessi : null;
+    $('#uf-perms').innerHTML = feats.map(([k, lbl]) => {
+      const lock = isSelf && ruolo === 'admin' && k === 'operatrici';
+      return `<label class="perm-item">
+        <input type="checkbox" class="uf-perm" value="${k}" ${!cur || cur.includes(k) ? 'checked' : ''} ${lock ? 'disabled checked' : ''}> ${lbl}${lock ? ' 🔒' : ''}
+      </label>`;
+    }).join('');
+  }
+  $('#uf-ruolo').onchange = renderPerms;
+  $('#uf-all').onclick = () => $('#uf-perms').querySelectorAll('.uf-perm:not(:disabled)').forEach(c => c.checked = true);
+  $('#uf-none').onclick = () => $('#uf-perms').querySelectorAll('.uf-perm:not(:disabled)').forEach(c => c.checked = false);
+  renderPerms();
+
   $('#uf-save').onclick = async () => {
+    const permessi = [...$('#uf-perms').querySelectorAll('.uf-perm:checked')].map(c => c.value);
+    if (isSelf && $('#uf-ruolo').value === 'admin' && !permessi.includes('operatrici')) permessi.push('operatrici');
+    if (!permessi.length) return toast('Abilita almeno una funzione', true);
     try {
       if (u) {
-        const body = { nome: $('#uf-nome').value, ruolo: $('#uf-ruolo').value };
+        const body = { nome: $('#uf-nome').value, ruolo: $('#uf-ruolo').value, permessi };
         if ($('#uf-pass').value) body.password = $('#uf-pass').value;
         await api('/admin/users/' + u.id, { method: 'PUT', body });
+        if (isSelf) { USER.permessi = permessi; }
       } else {
-        await api('/admin/users', { method: 'POST', body: { nome: $('#uf-nome').value, username: $('#uf-user').value, password: $('#uf-pass').value, ruolo: $('#uf-ruolo').value } });
+        await api('/admin/users', { method: 'POST', body: { nome: $('#uf-nome').value, username: $('#uf-user').value, password: $('#uf-pass').value, ruolo: $('#uf-ruolo').value, permessi } });
       }
       closeModal(); toast('Utente salvato'); viewOperatrici();
     } catch (e) { toast(e.message, true); }
