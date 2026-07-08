@@ -873,7 +873,7 @@ async function viewOperatrici() {
       ${rows.map(u => `<tr>
         <td><b>${esc(u.nome)}</b></td><td>${esc(u.username)}</td>
         <td><span class="tag ${u.ruolo === 'admin' ? '' : 'green'}">${u.ruolo === 'admin' ? 'Admin' : 'Operatrice'}</span></td>
-        <td>${u.orario_dal || u.orario_al ? `<span class="tag">${esc(u.orario_dal || '—')}–${esc(u.orario_al || '—')}</span>` : '<span class="muted">generale</span>'}</td>
+        <td>${u.orario_settimana ? '<span class="tag orange">personalizzato</span>' : (u.orario_dal || u.orario_al ? `<span class="tag">${esc(u.orario_dal || '—')}–${esc(u.orario_al || '—')}</span>` : '<span class="muted">generale</span>')}</td>
         <td>${u.permessi ? `<span class="tag orange">${u.permessi.length} abilitate</span>` : '<span class="tag green">tutte</span>'}</td>
         <td>${u.attivo ? '<span class="tag green">attivo</span>' : '<span class="tag red">disattivato</span>'}</td>
         <td>${fmtDT(u.created_at)}</td>
@@ -901,9 +901,13 @@ function userForm(u) {
         <option value="operatore" ${u?.ruolo !== 'admin' ? 'selected' : ''}>Operatrice</option>
         <option value="admin" ${u?.ruolo === 'admin' ? 'selected' : ''}>Amministratore</option>
       </select></div>
-      <div><label>🕐 Login dalle (vuoto = orario generale)</label><input id="uf-dal" type="time" style="width:100%" value="${u?.orario_dal || ''}"></div>
-      <div><label>🕐 fino alle</label><input id="uf-al" type="time" style="width:100%" value="${u?.orario_al || ''}"></div>
+      <div class="full"><label>🕐 Orario di lavoro</label>
+        <select id="uf-orario-tipo" style="width:100%">
+          <option value="generale" ${!u?.orario_settimana ? 'selected' : ''}>Segue il planning generale</option>
+          <option value="personalizzato" ${u?.orario_settimana ? 'selected' : ''}>Planning personalizzato</option>
+        </select></div>
     </div>
+    <div id="uf-orario-wrap" class="${u?.orario_settimana ? '' : 'hidden'}" style="margin-top:10px"></div>
     <label style="margin-top:14px">Funzioni abilitate</label>
     <div class="toolbar" style="margin-bottom:6px">
       <button class="btn" id="uf-all" type="button">✓ Tutte</button>
@@ -928,6 +932,16 @@ function userForm(u) {
     }).join('');
   }
   $('#uf-ruolo').onchange = renderPerms;
+  function renderOrarioEditor() {
+    $('#uf-orario-wrap').innerHTML = orarioEditorHtml('ufo', u?.orario_settimana || null);
+    orarioEditorBind('ufo');
+  }
+  if (u?.orario_settimana) renderOrarioEditor();
+  $('#uf-orario-tipo').onchange = () => {
+    const perso = $('#uf-orario-tipo').value === 'personalizzato';
+    $('#uf-orario-wrap').classList.toggle('hidden', !perso);
+    if (perso && !$('#uf-orario-wrap').innerHTML) renderOrarioEditor();
+  };
   $('#uf-all').onclick = () => $('#uf-perms').querySelectorAll('.uf-perm:not(:disabled)').forEach(c => c.checked = true);
   $('#uf-none').onclick = () => $('#uf-perms').querySelectorAll('.uf-perm:not(:disabled)').forEach(c => c.checked = false);
   renderPerms();
@@ -938,12 +952,15 @@ function userForm(u) {
     if (!permessi.length) return toast('Abilita almeno una funzione', true);
     try {
       if (u) {
-        const body = { nome: $('#uf-nome').value, ruolo: $('#uf-ruolo').value, permessi, orario_dal: $('#uf-dal').value || null, orario_al: $('#uf-al').value || null };
+        const orario_settimana = $('#uf-orario-tipo').value === 'personalizzato' ? orarioEditorRead('ufo') : null;
+        const body = { nome: $('#uf-nome').value, ruolo: $('#uf-ruolo').value, permessi, orario_settimana, orario_dal: null, orario_al: null };
         if ($('#uf-pass').value) body.password = $('#uf-pass').value;
         await api('/admin/users/' + u.id, { method: 'PUT', body });
         if (isSelf) { USER.permessi = permessi; }
       } else {
-        await api('/admin/users', { method: 'POST', body: { nome: $('#uf-nome').value, username: $('#uf-user').value, password: $('#uf-pass').value, ruolo: $('#uf-ruolo').value, permessi, orario_dal: $('#uf-dal').value || null, orario_al: $('#uf-al').value || null } });
+        const orario_settimana = $('#uf-orario-tipo').value === 'personalizzato' ? orarioEditorRead('ufo') : null;
+        const nu = await api('/admin/users', { method: 'POST', body: { nome: $('#uf-nome').value, username: $('#uf-user').value, password: $('#uf-pass').value, ruolo: $('#uf-ruolo').value, permessi } });
+        if (orario_settimana) await api('/admin/users/' + nu.id, { method: 'PUT', body: { orario_settimana } });
       }
       closeModal(); toast('Utente salvato'); viewOperatrici();
     } catch (e) { toast(e.message, true); }
@@ -988,6 +1005,56 @@ function agentForm(a) {
   };
 }
 
+/* ---------- EDITOR ORARIO SETTIMANALE ---------- */
+const GIORNI_SETT = [['lun','Lunedì'],['mar','Martedì'],['mer','Mercoledì'],['gio','Giovedì'],['ven','Venerdì'],['sab','Sabato'],['dom','Domenica']];
+
+function orarioEditorHtml(p, sched) {
+  return `<div class="orario-grid">
+    <div class="og-head"></div><div class="og-head">Dalle</div><div class="og-head">Alle</div><div class="og-head">Pausa dalle</div><div class="og-head">Pausa alle</div>
+    ${GIORNI_SETT.map(([k, lbl]) => {
+      const slots = sched ? (sched[k] || []) : null;
+      const on = sched ? slots.length > 0 : k !== 'dom';
+      let dal = '09:00', al = '19:00', pd = '', pa = '';
+      if (slots && slots.length === 1) { dal = slots[0][0]; al = slots[0][1]; }
+      if (slots && slots.length >= 2) { dal = slots[0][0]; pd = slots[0][1]; pa = slots[1][0]; al = slots[1][1]; }
+      return `<label class="og-day"><input type="checkbox" id="${p}-${k}-on" ${on ? 'checked' : ''}> ${lbl}</label>
+        <input type="time" id="${p}-${k}-dal" value="${dal}">
+        <input type="time" id="${p}-${k}-al" value="${al}">
+        <input type="time" id="${p}-${k}-pd" value="${pd}">
+        <input type="time" id="${p}-${k}-pa" value="${pa}">`;
+    }).join('')}
+  </div>
+  <div class="toolbar" style="margin:8px 0 0">
+    <button class="btn" type="button" id="${p}-copy">📋 Copia Lunedì su tutti i giorni</button>
+    <span class="muted" style="font-size:12px">La pausa divide la giornata in due fasce (es. 13:00–14:00 = pranzo). Giorno senza spunta = non lavorativo.</span>
+  </div>`;
+}
+function orarioEditorBind(p) {
+  const btn = $(`#${p}-copy`);
+  if (btn) btn.onclick = () => {
+    for (const [k] of GIORNI_SETT) {
+      if (k === 'lun') continue;
+      $(`#${p}-${k}-on`).checked = $(`#${p}-lun-on`).checked && k !== 'dom' ? true : (k === 'dom' ? $(`#${p}-${k}-on`).checked : true);
+      $(`#${p}-${k}-dal`).value = $(`#${p}-lun-dal`).value;
+      $(`#${p}-${k}-al`).value = $(`#${p}-lun-al`).value;
+      $(`#${p}-${k}-pd`).value = $(`#${p}-lun-pd`).value;
+      $(`#${p}-${k}-pa`).value = $(`#${p}-lun-pa`).value;
+    }
+    toast('Orario del Lunedì copiato');
+  };
+}
+function orarioEditorRead(p) {
+  const out = {};
+  for (const [k] of GIORNI_SETT) {
+    if (!$(`#${p}-${k}-on`).checked) { out[k] = []; continue; }
+    const dal = $(`#${p}-${k}-dal`).value, al = $(`#${p}-${k}-al`).value;
+    const pd = $(`#${p}-${k}-pd`).value, pa = $(`#${p}-${k}-pa`).value;
+    if (!dal || !al) { out[k] = []; continue; }
+    out[k] = (pd && pa) ? [[dal, pd], [pa, al]] : [[dal, al]];
+  }
+  return out;
+}
+
 /* ---------- IMPOSTAZIONI ---------- */
 async function viewImpostazioni() {
   const [s, tw] = await Promise.all([api('/admin/settings'), api('/twilio/config')]);
@@ -1009,11 +1076,10 @@ async function viewImpostazioni() {
     </div>
     <div class="card">
       <b>🕐 Orario di lavoro generale (operatrici)</b>
-      <p class="muted" style="margin-top:6px">Fuori da questa fascia le operatrici non possono accedere e chi è collegata viene scollegata. Vuoto = nessun limite. In Utenti puoi impostare un orario personalizzato che ha la precedenza.</p>
-      <div class="toolbar" style="margin-bottom:0">
-        <label style="margin:0">Dalle</label><input type="time" id="set-orario-dal" value="${esc(s.orario_dal || '')}">
-        <label style="margin:0">alle</label><input type="time" id="set-orario-al" value="${esc(s.orario_al || '')}">
-        <button class="btn primary" id="set-orario-save">💾 Salva orario</button>
+      <p class="muted" style="margin-top:6px">Fasce per ogni giorno della settimana con pausa opzionale. Fuori fascia le operatrici non possono accedere e chi è collegata viene scollegata. In Utenti puoi impostare un planning personalizzato che ha la precedenza.</p>
+      <div id="set-orario-editor" style="margin-top:10px">${(() => { let sc = null; try { sc = s.orario_settimana ? JSON.parse(s.orario_settimana) : null; } catch {} return orarioEditorHtml('gso', sc || (s.orario_dal && s.orario_al ? Object.fromEntries(GIORNI_SETT.map(([k]) => [k, [[s.orario_dal, s.orario_al]]])) : null)); })()}</div>
+      <div class="toolbar" style="margin-top:10px; margin-bottom:0">
+        <button class="btn primary" id="set-orario-save">💾 Salva planning</button>
         <button class="btn" id="set-orario-clear">✕ Nessun limite</button>
       </div>
     </div>
@@ -1027,12 +1093,13 @@ async function viewImpostazioni() {
       <p class="muted" style="margin-top:8px">Cambia la tua password dalla sezione Utenti. Ricorda di cambiare la password admin predefinita al primo accesso.</p>
     </div>`;
   $('#set-save').onclick = async () => { await api('/admin/settings', { method: 'PUT', body: { note: $('#set-note').value } }); toast('Salvato'); };
+  orarioEditorBind('gso');
   $('#set-orario-save').onclick = async () => {
-    await api('/admin/settings', { method: 'PUT', body: { orario_dal: $('#set-orario-dal').value, orario_al: $('#set-orario-al').value } });
-    toast('Orario generale salvato');
+    await api('/admin/settings', { method: 'PUT', body: { orario_settimana: JSON.stringify(orarioEditorRead('gso')), orario_dal: '', orario_al: '' } });
+    toast('Planning settimanale salvato');
   };
   $('#set-orario-clear').onclick = async () => {
-    await api('/admin/settings', { method: 'PUT', body: { orario_dal: '', orario_al: '' } });
+    await api('/admin/settings', { method: 'PUT', body: { orario_settimana: '', orario_dal: '', orario_al: '' } });
     toast('Limite orario rimosso'); viewImpostazioni();
   };
 

@@ -17,7 +17,9 @@ function login(username, password) {
 function publicUser(u) {
   let permessi = null;
   try { if (u.permessi) permessi = JSON.parse(u.permessi); } catch {}
-  return { id: u.id, username: u.username, nome: u.nome, ruolo: u.ruolo, attivo: u.attivo, permessi, orario_dal: u.orario_dal || null, orario_al: u.orario_al || null };
+  let orario_settimana = null;
+  try { if (u.orario_settimana) orario_settimana = JSON.parse(u.orario_settimana); } catch {}
+  return { id: u.id, username: u.username, nome: u.nome, ruolo: u.ruolo, attivo: u.attivo, permessi, orario_dal: u.orario_dal || null, orario_al: u.orario_al || null, orario_settimana };
 }
 
 function requireAuth(req, res, next) {

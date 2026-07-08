@@ -7,7 +7,8 @@ const router = express.Router();
 
 /* ---------- UTENTI (operatrici e admin) ---------- */
 router.get('/users', (req, res) => {
-  const rows = db.prepare('SELECT id, username, nome, ruolo, attivo, created_at, permessi, orario_dal, orario_al FROM users ORDER BY nome').all();
+  const rows = db.prepare('SELECT id, username, nome, ruolo, attivo, created_at, permessi, orario_dal, orario_al, orario_settimana FROM users ORDER BY nome').all();
+  rows.forEach(r => { try { r.orario_settimana = r.orario_settimana ? JSON.parse(r.orario_settimana) : null; } catch { r.orario_settimana = null; } });
   rows.forEach(r => { try { r.permessi = r.permessi ? JSON.parse(r.permessi) : null; } catch { r.permessi = null; } });
   res.json(rows);
 });
@@ -28,13 +29,15 @@ router.post('/users', (req, res) => {
 router.put('/users/:id', (req, res) => {
   const u = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
   if (!u) return res.status(404).json({ error: 'Utente non trovato' });
-  const { nome, ruolo, attivo, password, permessi, orario_dal, orario_al } = req.body;
+  const { nome, ruolo, attivo, password, permessi, orario_dal, orario_al, orario_settimana } = req.body;
   db.prepare('UPDATE users SET nome=?, ruolo=?, attivo=? WHERE id=?')
     .run(nome ?? u.nome, ['admin','operatore'].includes(ruolo) ? ruolo : u.ruolo, attivo != null ? (attivo ? 1 : 0) : u.attivo, req.params.id);
   if (permessi !== undefined) db.prepare('UPDATE users SET permessi=? WHERE id=?')
     .run(Array.isArray(permessi) ? JSON.stringify(permessi) : null, req.params.id);
   if (orario_dal !== undefined || orario_al !== undefined) db.prepare('UPDATE users SET orario_dal=?, orario_al=? WHERE id=?')
     .run(orario_dal || null, orario_al || null, req.params.id);
+  if (orario_settimana !== undefined) db.prepare('UPDATE users SET orario_settimana=? WHERE id=?')
+    .run(orario_settimana && typeof orario_settimana === 'object' ? JSON.stringify(orario_settimana) : null, req.params.id);
   if (password) db.prepare('UPDATE users SET password_hash=? WHERE id=?').run(bcrypt.hashSync(password, 10), req.params.id);
   res.json({ ok: true });
 });
