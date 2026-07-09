@@ -195,9 +195,11 @@ router.get('/callbacks', (req, res) => {
 router.put('/callbacks/:id', (req, res) => {
   const cb = db.prepare('SELECT * FROM callbacks WHERE id=?').get(req.params.id);
   if (!cb) return res.status(404).json({ error: 'Richiamo non trovato' });
-  const { richiamo_at, note, stato, user_id } = req.body;
-  db.prepare('UPDATE callbacks SET richiamo_at=?, note=?, stato=?, user_id=? WHERE id=?')
-    .run(richiamo_at ?? cb.richiamo_at, note ?? cb.note, ['pendente','fatto','annullato'].includes(stato) ? stato : cb.stato, user_id !== undefined ? user_id : cb.user_id, req.params.id);
+  const { richiamo_at, note, stato, user_id, tipo } = req.body;
+  const nuovoTipo = ['privato','pubblico'].includes(tipo) ? tipo : cb.tipo;
+  const nuovoUser = nuovoTipo === 'pubblico' ? null : (user_id !== undefined ? user_id : cb.user_id);
+  db.prepare('UPDATE callbacks SET richiamo_at=?, note=?, stato=?, user_id=?, tipo=? WHERE id=?')
+    .run(richiamo_at ?? cb.richiamo_at, note ?? cb.note, ['pendente','fatto','annullato'].includes(stato) ? stato : cb.stato, nuovoUser, nuovoTipo, req.params.id);
   res.json({ ok: true });
 });
 router.delete('/callbacks/:id', (req, res) => {

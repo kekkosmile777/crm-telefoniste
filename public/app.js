@@ -699,6 +699,8 @@ async function scaricaCsv(url, nomeFile) {
   toast('File scaricato ✓');
 }
 
+const tagTipoCb = t => t === 'pubblico' ? '<span class="tag green">👥 Pubblico</span>' : '<span class="tag">🔒 Privato</span>';
+
 /* ---------- RICHIAMI (admin) ---------- */
 async function viewRichiami() {
   const rows = await api('/admin/callbacks');
@@ -706,16 +708,16 @@ async function viewRichiami() {
   $('#view').innerHTML = `
     <h2 class="page-title">Richiami <em>Programmati</em></h2>
     <div class="table-wrap"><table>
-      <tr><th>Presa il</th><th>Da richiamare</th><th>Contatto</th><th>Telefono</th><th>Campagna</th><th>Operatrice</th><th>Note</th><th>Azioni</th></tr>
+      <tr><th>Presa il</th><th>Da richiamare</th><th>Contatto</th><th>Telefono</th><th>Campagna</th><th>Tipo</th><th>Operatrice</th><th>Note</th><th>Azioni</th></tr>
       ${rows.map(r => `<tr>
         <td>${fmtDT(r.presa_at)}</td>
         <td>${scaduto(r) ? `<span class="tag red">${fmtDT(r.richiamo_at)}</span>` : fmtDT(r.richiamo_at)}</td>
         <td>${esc((r.contatto_nome || '') + ' ' + (r.contatto_cognome || ''))}</td><td>${esc(r.telefono)}</td>
-        <td>${esc(r.campagna || '—')}</td><td>${esc(r.operatore || 'chiunque')}</td><td>${esc(r.note || '')}</td>
+        <td>${esc(r.campagna || '—')}</td><td>${tagTipoCb(r.tipo)}</td><td>${r.tipo === 'pubblico' ? '<span class="muted">chiunque</span>' : esc(r.operatore || '—')}</td><td>${esc(r.note || '')}</td>
         <td style="white-space:nowrap">
           <button class="btn" data-edit-cb="${r.id}">✏️</button>
           <button class="btn danger" data-del-cb="${r.id}">🗑</button>
-        </td></tr>`).join('') || '<tr><td colspan="8" class="muted">Nessun richiamo pendente</td></tr>'}
+        </td></tr>`).join('') || '<tr><td colspan="9" class="muted">Nessun richiamo pendente</td></tr>'}
     </table></div>`;
   $('#view').querySelectorAll('[data-del-cb]').forEach(b => b.onclick = async () => {
     await api('/admin/callbacks/' + b.dataset.delCb, { method: 'DELETE' }); toast('Richiamo annullato'); viewRichiami();
@@ -726,10 +728,14 @@ async function viewRichiami() {
     openModal('Modifica richiamo', `
       <p><b>${esc((r.contatto_nome || '') + ' ' + (r.contatto_cognome || ''))}</b> — ${esc(r.telefono)}</p>
       <label>Nuova data/ora *</label><input type="datetime-local" id="cb-dt" value="${dt}" style="width:100%">
+      <label>Tipo</label><select id="cb-tipo" style="width:100%">
+        <option value="privato" ${r.tipo !== 'pubblico' ? 'selected' : ''}>🔒 Privato (solo la sua operatrice)</option>
+        <option value="pubblico" ${r.tipo === 'pubblico' ? 'selected' : ''}>👥 Pubblico (qualsiasi operatrice)</option>
+      </select>
       <label>Note</label><textarea id="cb-note">${esc(r.note || '')}</textarea>
       <div class="modal-actions"><button class="btn" onclick="closeModal()">Annulla</button><button class="btn primary" id="cb-save">💾 Salva</button></div>`);
     $('#cb-save').onclick = async () => {
-      await api('/admin/callbacks/' + r.id, { method: 'PUT', body: { richiamo_at: $('#cb-dt').value.replace('T', ' '), note: $('#cb-note').value } });
+      await api('/admin/callbacks/' + r.id, { method: 'PUT', body: { richiamo_at: $('#cb-dt').value.replace('T', ' '), note: $('#cb-note').value, tipo: $('#cb-tipo').value } });
       closeModal(); toast('Richiamo aggiornato'); viewRichiami();
     };
   });
@@ -1399,7 +1405,7 @@ function renderContact() {
   const c = WS.current.contact;
   const isRichiamo = WS.current.tipo === 'richiamo';
   $('#ws-contact').innerHTML = `
-    ${isRichiamo ? `<div class="tag orange" style="margin-bottom:8px">🔄 RICHIAMO ${fmtDT(WS.current.richiamo_at)} ${esc(WS.current.richiamo_note || '')}</div>` : ''}
+    ${isRichiamo ? `<div class="tag orange" style="margin-bottom:8px">🔄 RICHIAMO ${WS.current.richiamo_tipo === 'pubblico' ? '👥' : '🔒'} ${fmtDT(WS.current.richiamo_at)} ${esc(WS.current.richiamo_note || '')}</div>` : ''}
     <div class="cname">${esc(nomeCompleto(c))}</div>
     <div class="contact-meta">
       ${c.comune ? `<span class="tag">📍 ${esc(c.comune)}</span>` : ''}
@@ -1551,6 +1557,11 @@ function renderEsitoForm() {
         const dt = new Date(Date.now() + 3600e3);
         const val = `${dt.toISOString().slice(0, 10)}T${String(dt.getHours()).padStart(2, '0')}:00`;
         extra.innerHTML = `<label>📅 Quando richiamare *</label><input type="datetime-local" id="ws-cb-dt" value="${val}" style="width:100%">
+          <label>Tipo richiamo</label>
+          <div style="display:flex;gap:16px;margin:2px 0 4px">
+            <label style="margin:0;display:flex;align-items:center;gap:6px;color:var(--text);font-size:13px;cursor:pointer"><input type="radio" name="ws-cb-tipo" value="privato" checked> 🔒 Privato (torna a me)</label>
+            <label style="margin:0;display:flex;align-items:center;gap:6px;color:var(--text);font-size:13px;cursor:pointer"><input type="radio" name="ws-cb-tipo" value="pubblico"> 👥 Pubblico (chiunque)</label>
+          </div>
           <label>Note richiamo</label><input id="ws-cb-note" style="width:100%" placeholder="es. preferisce il pomeriggio">`;
       } else if (esito === 'appuntamento_fissato') {
         extra.innerHTML = `
@@ -1575,6 +1586,7 @@ function renderEsitoForm() {
       if (esito === 'richiamo') {
         body.richiamo_at = $('#ws-cb-dt')?.value;
         body.richiamo_note = $('#ws-cb-note')?.value;
+        body.richiamo_tipo = document.querySelector('input[name="ws-cb-tipo"]:checked')?.value || 'privato';
         if (!body.richiamo_at) return toast('Imposta data e ora del richiamo', true);
       }
       if (esito === 'appuntamento_fissato') {
@@ -1605,11 +1617,11 @@ async function viewRichiamiOp() {
     <h2 class="page-title">I miei <em>Richiami</em></h2>
     <p class="muted" style="margin-bottom:12px">I richiami scaduti ti vengono proposti automaticamente in Postazione con "Prossima chiamata".</p>
     <div class="table-wrap"><table>
-      <tr><th>Da richiamare</th><th>Contatto</th><th>Telefono</th><th>Campagna</th><th>Note</th></tr>
+      <tr><th>Da richiamare</th><th>Contatto</th><th>Telefono</th><th>Campagna</th><th>Tipo</th><th>Note</th></tr>
       ${rows.map(r => `<tr>
         <td>${scaduto(r) ? `<span class="tag red">${fmtDT(r.richiamo_at)}</span>` : fmtDT(r.richiamo_at)}</td>
         <td>${esc((r.contatto_nome || '') + ' ' + (r.contatto_cognome || ''))}</td>
-        <td>${esc(r.telefono)}</td><td>${esc(r.campagna || '—')}</td><td>${esc(r.note || '')}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">Nessun richiamo</td></tr>'}
+        <td>${esc(r.telefono)}</td><td>${esc(r.campagna || '—')}</td><td>${tagTipoCb(r.tipo)}</td><td>${esc(r.note || '')}</td></tr>`).join('') || '<tr><td colspan="6" class="muted">Nessun richiamo</td></tr>'}
     </table></div>`;
 }
 

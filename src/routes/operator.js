@@ -40,14 +40,14 @@ router.post('/next', (req, res) => {
     SELECT cb.*, ct.nome, ct.cognome, ct.telefono, ct.comune, ct.offerto_da, ct.parentela, ct.note AS contatto_note, ct.esito AS contatto_esito
     FROM callbacks cb JOIN contacts ct ON ct.id = cb.contact_id
     WHERE cb.stato='pendente' AND cb.richiamo_at <= datetime('now','localtime')
-      AND (cb.user_id = ? OR cb.user_id IS NULL)
+      AND (cb.tipo = 'pubblico' OR cb.user_id = ?)
     ORDER BY cb.richiamo_at LIMIT 1`).get(uid);
   if (cb) {
     db.prepare('UPDATE callbacks SET user_id=? WHERE id=?').run(uid, cb.id);
     return res.json({
       tipo: 'richiamo', callback_id: cb.id, campaign_id: cb.campaign_id,
       contact: { id: cb.contact_id, nome: cb.nome, cognome: cb.cognome, telefono: cb.telefono, comune: cb.comune, offerto_da: cb.offerto_da, parentela: cb.parentela, note: cb.contatto_note, esito: cb.contatto_esito },
-      richiamo_at: cb.richiamo_at, richiamo_note: cb.note
+      richiamo_at: cb.richiamo_at, richiamo_note: cb.note, richiamo_tipo: cb.tipo
     });
   }
 
@@ -143,7 +143,7 @@ router.get('/callbacks/upcoming', (req, res) => {
   const rows = db.prepare(`
     SELECT cb.id, cb.richiamo_at, ct.nome, ct.cognome
     FROM callbacks cb JOIN contacts ct ON ct.id = cb.contact_id
-    WHERE cb.stato='pendente' AND (cb.user_id = ? OR cb.user_id IS NULL)
+    WHERE cb.stato='pendente' AND (cb.tipo = 'pubblico' OR cb.user_id = ?)
       AND cb.richiamo_at > datetime('now','localtime')
       AND cb.richiamo_at <= datetime('now','localtime','+5 minutes')
     ORDER BY cb.richiamo_at LIMIT 10`).all(req.user.id);
@@ -154,7 +154,7 @@ router.get('/callbacks/upcoming', (req, res) => {
 router.post('/calls/:id/end', (req, res) => {
   const call = db.prepare('SELECT * FROM calls WHERE id=? AND user_id=?').get(req.params.id, req.user.id);
   if (!call) return res.status(404).json({ error: 'Chiamata non trovata' });
-  const { esito, note, durata, cc_id, callback_id, richiamo_at, richiamo_note, appuntamento, twilio_sid } = req.body;
+  const { esito, note, durata, cc_id, callback_id, richiamo_at, richiamo_note, richiamo_tipo, appuntamento, twilio_sid } = req.body;
   if (!ESITI.includes(esito)) return res.status(400).json({ error: 'Esito non valido' });
 
   const tx = db.transaction(() => {
@@ -183,8 +183,9 @@ router.post('/calls/:id/end', (req, res) => {
     // nuovo richiamo
     if (esito === 'richiamo') {
       if (!richiamo_at) throw new Error('Data richiamo obbligatoria');
-      db.prepare('INSERT INTO callbacks (contact_id, campaign_id, user_id, richiamo_at, note) VALUES (?,?,?,?,?)')
-        .run(call.contact_id, call.campaign_id, req.user.id, richiamo_at.replace('T', ' '), richiamo_note || '');
+      const cbPub = richiamo_tipo === 'pubblico';
+      db.prepare('INSERT INTO callbacks (contact_id, campaign_id, user_id, richiamo_at, note, tipo) VALUES (?,?,?,?,?,?)')
+        .run(call.contact_id, call.campaign_id, cbPub ? null : req.user.id, richiamo_at.replace('T', ' '), richiamo_note || '', cbPub ? 'pubblico' : 'privato');
     }
 
     // nuovo appuntamento
@@ -213,7 +214,7 @@ router.get('/callbacks', (req, res) => {
   const rows = db.prepare(`
     SELECT cb.*, ct.nome AS contatto_nome, ct.cognome AS contatto_cognome, ct.telefono, cp.nome AS campagna
     FROM callbacks cb JOIN contacts ct ON ct.id=cb.contact_id LEFT JOIN campaigns cp ON cp.id=cb.campaign_id
-    WHERE cb.stato='pendente' AND (cb.user_id = ? OR cb.user_id IS NULL)
+    WHERE cb.stato='pendente' AND (cb.tipo = 'pubblico' OR cb.user_id = ?)
     ORDER BY cb.richiamo_at LIMIT 100`).all(req.user.id);
   res.json(rows);
 });

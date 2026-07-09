@@ -138,6 +138,7 @@ for (const sql of [
   "ALTER TABLE campaigns ADD COLUMN copione TEXT",
   "ALTER TABLE calls ADD COLUMN recording_sid TEXT",
   "ALTER TABLE calls ADD COLUMN recording_dur INTEGER",
+  "ALTER TABLE callbacks ADD COLUMN tipo TEXT NOT NULL DEFAULT 'privato'",
   `CREATE TABLE IF NOT EXISTS user_status_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,

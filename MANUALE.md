@@ -132,7 +132,7 @@ Consultazione e modifica anagrafica, cornetta 📞 per chiamata immediata. Nient
 | Da chiamare | Non ancora lavorato | In coda |
 | In chiamata | Telefonata in corso | Stato temporaneo |
 | ✅ Appuntamento fissato | Obiettivo raggiunto | Chiede data/ora/indirizzo/agente e crea l'appuntamento in calendario |
-| 🔄 Richiamo | Da risentire | Chiede data/ora: il contatto ricompare in coda al momento giusto |
+| 🔄 Richiamo | Da risentire | Chiede data/ora e tipo: **Privato** (torna solo all'operatrice che l'ha preso) o **Pubblico** (può prenderlo qualsiasi operatrice). Il contatto ricompare in coda al momento giusto. L'admin può cambiare il tipo dalla sezione Richiami |
 | ❌ Non interessato | Rifiuto | Chiuso in campagna |
 | Non risponde | Nessuna risposta | **Torna in coda** fino a "max tentativi", poi chiuso |
 | Segreteria | Risponde la segreteria | Come "non risponde" (ritenta) |
