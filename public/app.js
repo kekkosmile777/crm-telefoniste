@@ -205,6 +205,7 @@ async function viewMonitor() {
         const stato = !o.online ? '<span class="dot off"></span>Offline'
           : inCall ? '<span class="dot call"></span>In chiamata'
           : o.stato === 'in_esito' ? '<span class="dot on"></span>Compila esito'
+          : o.stato === 'pausa' ? '☕ In pausa'
           : '<span class="dot on"></span>Disponibile';
         return `<div class="op-card ${inCall ? 'oncall' : ''}">
           <b>${esc(o.nome)}</b>
