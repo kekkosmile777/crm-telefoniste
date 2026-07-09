@@ -309,6 +309,19 @@ router.get('/dashboard', (req, res) => {
   res.json({ appOggi, appDomani, chiamateOggi, operatoriOnline, campagneAttive, richiamiScaduti, ultimeChiamate });
 });
 
+/* ---------- BACKUP DATABASE ---------- */
+router.get('/backup.db', async (req, res) => {
+  const path = require('path');
+  const os = require('os');
+  try {
+    const tmp = path.join(os.tmpdir(), 'crm-backup.db');
+    await db.backup(tmp);
+    res.download(tmp, `crm-backup-${new Date().toISOString().slice(0, 10)}.db`);
+  } catch (e) {
+    res.status(500).json({ error: 'Backup fallito: ' + e.message });
+  }
+});
+
 /* ---------- IMPOSTAZIONI ---------- */
 router.get('/settings', (req, res) => {
   const rows = db.prepare('SELECT * FROM settings').all();

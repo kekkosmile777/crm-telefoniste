@@ -12,13 +12,29 @@ const app = express();
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true })); // per i webhook Twilio
 
-// ---- Auth ----
+// ---- Healthcheck (per monitoraggio uptime) ----
+app.get('/healthz', (req, res) => res.json({ ok: true, ts: Date.now() }));
+
+// ---- Auth (con protezione anti brute-force) ----
+const loginAttempts = new Map(); // ip|username -> { count, reset }
+setInterval(() => { const now = Date.now(); for (const [k, v] of loginAttempts) if (now > v.reset) loginAttempts.delete(k); }, 10 * 60000).unref();
+
 app.post('/api/auth/login', (req, res) => {
   const { username, password } = req.body || {};
   if (!username || !password) return res.status(400).json({ error: 'Username e password obbligatori' });
+  const ip = (req.headers['x-forwarded-for'] || req.ip || '').toString().split(',')[0].trim();
+  const key = ip + '|' + username.trim().toLowerCase();
+  const now = Date.now();
+  let rec = loginAttempts.get(key);
+  if (!rec || now > rec.reset) rec = { count: 0, reset: now + 15 * 60000 };
+  if (rec.count >= 8) return res.status(429).json({ error: 'Troppi tentativi falliti: riprova tra 15 minuti' });
   const result = login(username.trim().toLowerCase(), password);
-  if (!result) return res.status(401).json({ error: 'Credenziali non valide' });
+  if (!result) {
+    rec.count++; loginAttempts.set(key, rec);
+    return res.status(401).json({ error: 'Credenziali non valide' });
+  }
   if (result.error) return res.status(403).json({ error: result.error });
+  loginAttempts.delete(key);
   res.json(result);
 });
 

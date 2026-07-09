@@ -1089,10 +1089,21 @@ async function viewImpostazioni() {
       <div style="margin-top:10px"><button class="btn primary" id="set-save">💾 Salva</button></div>
     </div>
     <div class="card">
-      <b>🔒 Sicurezza</b>
-      <p class="muted" style="margin-top:8px">Cambia la tua password dalla sezione Utenti. Ricorda di cambiare la password admin predefinita al primo accesso.</p>
+      <b>🔒 Sicurezza e backup</b>
+      <p class="muted" style="margin-top:8px">Cambia la tua password dalla sezione Utenti. Scarica regolarmente un backup del database e conservalo al sicuro.</p>
+      <button class="btn primary" id="set-backup" style="margin-top:8px">💾 Scarica backup database</button>
     </div>`;
   $('#set-save').onclick = async () => { await api('/admin/settings', { method: 'PUT', body: { note: $('#set-note').value } }); toast('Salvato'); };
+  $('#set-backup').onclick = async () => {
+    const res = await fetch('/api/admin/backup.db', { headers: { Authorization: 'Bearer ' + TOKEN } });
+    if (!res.ok) return toast('Backup fallito', true);
+    const blob = await res.blob();
+    const a2 = document.createElement('a');
+    a2.href = URL.createObjectURL(blob);
+    a2.download = 'crm-backup-' + new Date().toISOString().slice(0, 10) + '.db';
+    a2.click();
+    toast('Backup scaricato ✓');
+  };
   orarioEditorBind('gso');
   $('#set-orario-save').onclick = async () => {
     await api('/admin/settings', { method: 'PUT', body: { orario_settimana: JSON.stringify(orarioEditorRead('gso')), orario_dal: '', orario_al: '' } });

@@ -71,6 +71,7 @@ router.post('/next', (req, res) => {
         SELECT cc.id AS cc_id, cc.tentativi, ct.*, dist_km(@lat, @lng, ct.lat, ct.lng) AS dist
         FROM campaign_contacts cc JOIN contacts ct ON ct.id = cc.contact_id
         WHERE cc.campaign_id = @cid AND cc.stato = 'da_chiamare' ${cond.replace('?', '@uid')}
+          AND ct.esito != 'blacklist'
           AND ct.lat IS NOT NULL AND dist_km(@lat, @lng, ct.lat, ct.lng) <= @raggio
         ORDER BY dist, cc.tentativi LIMIT 1`)
         .get({ lat, lng, cid: campaignId, uid: req.user.id, raggio: camp.raggio_km || 25 });
@@ -78,7 +79,7 @@ router.post('/next', (req, res) => {
       row = db.prepare(`
         SELECT cc.id AS cc_id, cc.tentativi, ct.*
         FROM campaign_contacts cc JOIN contacts ct ON ct.id = cc.contact_id
-        WHERE cc.campaign_id = ? AND cc.stato = 'da_chiamare' ${cond}
+        WHERE cc.campaign_id = ? AND cc.stato = 'da_chiamare' AND ct.esito != 'blacklist' ${cond}
         ORDER BY cc.tentativi, cc.id LIMIT 1`).get(campaignId, req.user.id);
     }
     if (!row) return null;
