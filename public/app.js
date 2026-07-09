@@ -271,6 +271,8 @@ function campaignForm(c = null) {
     <label>Nome *</label><input id="cf-nome" style="width:100%" value="${esc(c?.nome || '')}">
     <label>Descrizione</label><textarea id="cf-desc">${esc(c?.descrizione || '')}</textarea>
     <label>Note operative (visibili alle operatrici)</label><textarea id="cf-note">${esc(c?.note || '')}</textarea>
+    <label>📜 Copione di chiamata (visibile all'operatrice durante la telefonata — usa {nome}, {cognome}, {comune} come segnaposto)</label>
+    <textarea id="cf-copione" style="min-height:110px">${esc(c?.copione || '')}</textarea>
     <div class="form-grid">
       <div class="full"><label>Tipo di campagna</label>
         <select id="cf-tipo" style="width:100%">
@@ -293,7 +295,7 @@ function campaignForm(c = null) {
     </div>`);
   $('#cf-tipo').onchange = () => $('#cf-raggio-wrap').classList.toggle('hidden', $('#cf-tipo').value !== 'geo');
   $('#cf-save').onclick = async () => {
-    const body = { nome: $('#cf-nome').value.trim(), descrizione: $('#cf-desc').value, note: $('#cf-note').value, modalita: $('#cf-mod').value, max_tentativi: $('#cf-max').value, obiettivo_app: $('#cf-ob').value, tipo: $('#cf-tipo').value, raggio_km: $('#cf-raggio').value };
+    const body = { nome: $('#cf-nome').value.trim(), descrizione: $('#cf-desc').value, note: $('#cf-note').value, copione: $('#cf-copione').value, modalita: $('#cf-mod').value, max_tentativi: $('#cf-max').value, obiettivo_app: $('#cf-ob').value, tipo: $('#cf-tipo').value, raggio_km: $('#cf-raggio').value };
     if (!body.nome) return toast('Nome obbligatorio', true);
     try {
       if (c) await api(`/admin/campaigns/${c.id}`, { method: 'PUT', body });
@@ -664,6 +666,8 @@ async function viewRegistro() {
       <select id="rg-user"><option value="">Tutte le operatrici</option>${users.filter(u => u.ruolo === 'operatore').map(u => `<option value="${u.id}">${esc(u.nome)}</option>`).join('')}</select>
       <select id="rg-camp"><option value="">Tutte le campagne</option>${camps.map(c => `<option value="${c.id}">${esc(c.nome)}</option>`).join('')}</select>
       <input type="date" id="rg-from"> <input type="date" id="rg-to">
+      <span class="spacer"></span>
+      <button class="btn" id="rg-export">📊 Export Excel</button>
     </div>
     <div id="rg-table"></div>`;
   async function render() {
@@ -671,14 +675,27 @@ async function viewRegistro() {
     const d = await api('/admin/calls?' + q);
     $('#rg-table').innerHTML = `<p class="muted" style="margin-bottom:8px">${d.total} chiamate</p>
       <div class="table-wrap"><table>
-      <tr><th>Data e ora</th><th>Contatto</th><th>Numero</th><th>Operatrice</th><th>Campagna</th><th>Durata</th><th>Esito</th><th>Note</th></tr>
+      <tr><th>Data e ora</th><th>Contatto</th><th>Numero</th><th>Operatrice</th><th>Campagna</th><th>Durata</th><th>Esito</th><th>🔊</th><th>Note</th></tr>
       ${d.rows.map(c => `<tr><td>${fmtDT(c.started_at)}</td><td>${esc((c.contatto_nome || '') + ' ' + (c.contatto_cognome || ''))}</td>
         <td>${esc(c.contatto_telefono)}</td><td>${esc(c.operatore)}</td><td>${esc(c.campagna || '—')}</td>
-        <td>${fmtDur(c.durata)}</td><td>${tag(c.esito)}</td><td>${esc(c.note || '')}</td></tr>`).join('') || '<tr><td colspan="8" class="muted">Nessuna chiamata</td></tr>'}
+        <td>${fmtDur(c.durata)}</td><td>${tag(c.esito)}</td>
+        <td>${c.recording_sid ? `<button class="btn" data-play="${c.id}">▶</button>` : '<span class="muted">—</span>'}</td>
+        <td>${esc(c.note || '')}</td></tr>`).join('') || '<tr><td colspan="9" class="muted">Nessuna chiamata</td></tr>'}
       </table></div>`;
+    $('#rg-table').querySelectorAll('[data-play]').forEach(b => b.onclick = () => playRecording(b.dataset.play, b));
   }
   ['rg-esito', 'rg-user', 'rg-camp', 'rg-from', 'rg-to'].forEach(id => $('#' + id).onchange = render);
+  $('#rg-export').onclick = () => scaricaCsv(`/api/admin/calls-export.csv?from=${$('#rg-from').value}&to=${$('#rg-to').value}`, 'chiamate.csv');
   render();
+}
+
+async function scaricaCsv(url, nomeFile) {
+  const res = await fetch(url, { headers: { Authorization: 'Bearer ' + TOKEN } });
+  if (!res.ok) return toast('Export fallito', true);
+  const blob = await res.blob();
+  const a2 = document.createElement('a');
+  a2.href = URL.createObjectURL(blob); a2.download = nomeFile; a2.click();
+  toast('File scaricato ✓');
 }
 
 /* ---------- RICHIAMI (admin) ---------- */
@@ -826,6 +843,8 @@ async function viewReport() {
     <div class="toolbar">
       <label style="margin:0">Dal</label><input type="date" id="rp-from" value="${monthAgo}">
       <label style="margin:0">Al</label><input type="date" id="rp-to" value="${today}">
+      <span class="spacer"></span>
+      <button class="btn" id="rp-export">📊 Export Excel</button>
     </div>
     <div id="rp-body"></div>`;
   async function render() {
@@ -852,6 +871,21 @@ async function viewReport() {
           <tr><th>Operatrice</th><th>Chiamate</th><th>Ore</th><th>Appuntamenti</th><th>Richiami</th><th>Non interessati</th><th>Conversione</th></tr>
           ${d.perOperatore.map(o => `<tr><td>${esc(o.nome)}</td><td>${o.chiamate}</td><td>${Math.round((o.sec || 0) / 3600 * 10) / 10}</td><td>${o.appuntamenti}</td><td>${o.richiami}</td><td>${o.non_interessati}</td><td>${o.chiamate ? (100 * o.appuntamenti / o.chiamate).toFixed(1) : 0}%</td></tr>`).join('') || '<tr><td colspan="7" class="muted">Nessun dato</td></tr>'}
         </table></div></div>
+      <div class="card"><b>⏱ Produttività operatrici (tempi per stato)</b>
+        <div class="table-wrap" style="margin-top:10px"><table>
+          <tr><th>Operatrice</th><th>Disponibile</th><th>In chiamata</th><th>Post-chiamata</th><th>In pausa</th><th>Chiamate/ora</th></tr>
+          ${(() => {
+            const byOp = {};
+            (d.produttivita || []).forEach(r => { (byOp[r.nome] = byOp[r.nome] || {})[r.stato] = r.sec || 0; });
+            const fmtH = s => { s = Math.round(s || 0); const h = Math.floor(s / 3600), m = Math.round((s % 3600) / 60); return h ? `${h}h ${m}m` : `${m}m`; };
+            return Object.entries(byOp).map(([nome, st]) => {
+              const oreLavoro = ((st.idle || 0) + (st.in_chiamata || 0) + (st.in_esito || 0)) / 3600;
+              const op = d.perOperatore.find(o => o.nome === nome);
+              const cph = oreLavoro > 0.05 && op ? (op.chiamate / oreLavoro).toFixed(1) : '—';
+              return `<tr><td>${esc(nome)}</td><td>${fmtH(st.idle)}</td><td>${fmtH(st.in_chiamata)}</td><td>${fmtH(st.in_esito)}</td><td>${fmtH(st.pausa)}</td><td><b>${cph}</b></td></tr>`;
+            }).join('') || '<tr><td colspan="6" class="muted">Nessun dato di presenza nel periodo</td></tr>';
+          })()}
+        </table></div></div>
       <div class="card"><b>Per campagna</b>
         <div class="table-wrap" style="margin-top:10px"><table>
           <tr><th>Campagna</th><th>Chiamate</th><th>Appuntamenti</th><th>Conversione</th></tr>
@@ -859,6 +893,7 @@ async function viewReport() {
         </table></div></div>`;
   }
   ['rp-from', 'rp-to'].forEach(id => $('#' + id).onchange = render);
+  $('#rp-export').onclick = () => scaricaCsv(`/api/admin/report-export.csv?from=${$('#rp-from').value}&to=${$('#rp-to').value}`, 'report-operatrici.csv');
   render();
 }
 
@@ -1068,6 +1103,7 @@ async function viewImpostazioni() {
           : `<span class="tag orange">quasi pronto</span> Twilio è collegato: <b>seleziona il numero in uscita</b> qui sotto per attivare il softphone.`)
         : `<span class="tag red">non configurato</span> Il CRM funziona in <b>modalità manuale</b>. Imposta le variabili d'ambiente <code>TWILIO_ACCOUNT_SID, TWILIO_API_KEY, TWILIO_API_SECRET, TWILIO_TWIML_APP_SID</code> e riavvia.`}</p>
       ${tw.twilio_ok ? `
+      <label style="margin-top:12px"><input type="checkbox" id="set-rec" ${s.registrazione === '1' ? 'checked' : ''}> 🔴 Registra le chiamate (attenzione: informa il cliente come da normativa)</label>
       <label>📞 Numero in uscita (caller ID)</label>
       <div class="toolbar" style="margin-bottom:0">
         <select id="set-callerid" style="min-width:260px"><option value="">— Nessuno (softphone disattivo) —</option></select>
@@ -1115,6 +1151,10 @@ async function viewImpostazioni() {
   };
 
   if (tw.twilio_ok) {
+    $('#set-rec').onchange = async () => {
+      await api('/admin/settings', { method: 'PUT', body: { registrazione: $('#set-rec').checked ? '1' : '0' } });
+      toast($('#set-rec').checked ? 'Registrazione chiamate ATTIVA' : 'Registrazione disattivata');
+    };
     api('/twilio/numbers').then(nums => {
       $('#set-callerid').innerHTML = '<option value="">— Nessuno (softphone disattivo) —</option>' +
         nums.map(n => `<option value="${esc(n.numero)}" ${tw.caller_id === n.numero ? 'selected' : ''}>${esc(n.numero)}</option>`).join('');
@@ -1137,15 +1177,31 @@ const WS = { // stato postazione
   selectedCampaign: null, presence: 'idle'
 };
 
+let cbNotificati = new Set();
+async function checkRichiamiImminenti() {
+  try {
+    const rows = await api('/op/callbacks/upcoming');
+    for (const r of rows) {
+      if (cbNotificati.has(r.id)) continue;
+      cbNotificati.add(r.id);
+      const ora = r.richiamo_at.slice(11, 16);
+      toast(`⏰ Richiamo tra poco (${ora}): ${r.nome || ''} ${r.cognome || ''} — vai in Postazione e premi "Prossima chiamata"`);
+      try { new Audio('data:audio/wav;base64,UklGRl9vT19XQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YU' + 'A'.repeat(100)).play().catch(() => {}); } catch {}
+    }
+  } catch {}
+}
+
 function startHeartbeat() {
   clearInterval(HEARTBEAT_TIMER);
+  let tick = 0;
   const send = () => api('/op/heartbeat', { method: 'POST', body: {
     stato: WS.presence,
     contact: WS.current ? { id: WS.current.contact.id, nome: nomeCompleto(WS.current.contact), telefono: WS.current.contact.telefono } : null,
     campaign_id: WS.current?.campaign_id || null
   } }).catch(() => {});
   send();
-  HEARTBEAT_TIMER = setInterval(send, 10000);
+  checkRichiamiImminenti();
+  HEARTBEAT_TIMER = setInterval(() => { send(); if (++tick % 6 === 0) checkRichiamiImminenti(); }, 10000);
 }
 
 async function initTwilio() {
@@ -1191,6 +1247,11 @@ async function viewPostazione() {
             </select>
             <button class="btn primary big" id="ws-next">▶ Prossima chiamata</button>
           </div>
+          <div class="toolbar" style="margin:10px 0 0">
+            <button class="btn" id="ws-pausa">${WS.presence === 'pausa' ? '▶ Riprendi il lavoro' : '☕ Vai in pausa'}</button>
+            <span class="muted" id="ws-pausa-info">${WS.presence === 'pausa' ? 'Sei in pausa: le chiamate sono sospese' : ''}</span>
+          </div>
+          <div id="ws-copione" class="card hidden" style="margin-top:14px; background:#fffbea; border-color:#f0e6c0"></div>
           <div id="ws-geo-bar" class="toolbar hidden" style="margin:10px 0 0">
             <button class="btn" id="ws-geo-btn">\uD83D\uDCCD Scegli posizione</button>
             <span id="ws-geo-label" class="muted"></span>
@@ -1219,7 +1280,16 @@ async function viewPostazione() {
   };
   $('#ws-geo-btn').onclick = () => openGeoMap();
   refreshGeoBar();
-  $('#ws-next').onclick = nextContact;
+  $('#ws-pausa').onclick = () => {
+    if (WS.callId) return toast('Chiudi prima la chiamata in corso', true);
+    WS.presence = WS.presence === 'pausa' ? 'idle' : 'pausa';
+    toast(WS.presence === 'pausa' ? 'Sei in pausa ☕' : 'Bentornata! Sei di nuovo disponibile');
+    viewPostazione();
+  };
+  $('#ws-next').onclick = () => {
+    if (WS.presence === 'pausa') return toast('Sei in pausa: premi "Riprendi il lavoro" per continuare', true);
+    nextContact();
+  };
   if (WS.autoNext) { WS.autoNext = false; nextContact().then(() => { if (WS.current) startCall(); }); }
   if (WS.current) renderContact(); // ripristina se si torna sulla vista
 }
@@ -1312,6 +1382,18 @@ async function openGeoMap() {
   } catch (e) { toast(e.message, true); }
 }
 
+function renderCopione() {
+  const box = $('#ws-copione');
+  if (!box) return;
+  const camp = (WS.campsCache || []).find(x => x.id == (WS.current?.campaign_id || WS.selectedCampaign));
+  const c = WS.current?.contact;
+  if (!camp?.copione || !c) { box.classList.add('hidden'); return; }
+  const testo = camp.copione
+    .replaceAll('{nome}', c.nome || '').replaceAll('{cognome}', c.cognome || '').replaceAll('{comune}', c.comune || '');
+  box.innerHTML = `<b>📜 Copione</b><div style="margin-top:8px; white-space:pre-wrap; line-height:1.5">${esc(testo)}</div>`;
+  box.classList.remove('hidden');
+}
+
 function renderContact() {
   const c = WS.current.contact;
   const isRichiamo = WS.current.tipo === 'richiamo';
@@ -1330,6 +1412,7 @@ function renderContact() {
     <div class="call-status" id="ws-status"></div>
     <div class="call-timer hidden" id="ws-timer">00:00</div>
     <div class="call-buttons" id="ws-buttons"></div>`;
+  renderCopione();
   updateCallUI();
 }
 
@@ -1409,7 +1492,11 @@ async function startCall() {
 
     if (WS.twilioReady) {
       WS.connection = await WS.device.connect({ params: { To: c.telefono } });
-      WS.connection.on('accept', () => { setSpeakerVolume(WS.volume ?? 100); updateCallUI(); });
+      WS.connection.on('accept', () => {
+        setSpeakerVolume(WS.volume ?? 100); updateCallUI();
+        const sid = WS.connection.parameters?.CallSid;
+        if (sid && WS.callId) api(`/op/calls/${WS.callId}/sid`, { method: 'POST', body: { twilio_sid: sid } }).catch(() => {});
+      });
       WS.connection.on('disconnect', () => { if (WS.callId) onCallEnded(); });
       WS.connection.on('error', e => toast('Errore chiamata: ' + e.message, true));
     }
@@ -1680,6 +1767,21 @@ async function openMapAdmin(campId, nomeCampagna) {
       map.fitBounds(bounds, { padding: [30, 30] });
     }, 60);
   } catch (e) { toast(e.message, true); }
+}
+
+/* ---------- PLAYER REGISTRAZIONI ---------- */
+let AUDIO_EL = null;
+async function playRecording(callId, btn) {
+  try {
+    if (AUDIO_EL) { AUDIO_EL.pause(); AUDIO_EL = null; }
+    if (btn) btn.textContent = '⏳';
+    const res = await fetch('/api/twilio/recordings/' + callId, { headers: { Authorization: 'Bearer ' + TOKEN } });
+    if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || 'Registrazione non disponibile'); }
+    const blob = await res.blob();
+    AUDIO_EL = new Audio(URL.createObjectURL(blob));
+    AUDIO_EL.play();
+    if (btn) { btn.textContent = '⏸'; AUDIO_EL.onended = () => btn.textContent = '▶'; btn.onclick = () => { if (AUDIO_EL.paused) { AUDIO_EL.play(); btn.textContent = '⏸'; } else { AUDIO_EL.pause(); btn.textContent = '▶'; } }; }
+  } catch (e) { if (btn) btn.textContent = '▶'; toast(e.message, true); }
 }
 
 /* ---------- registry ---------- */

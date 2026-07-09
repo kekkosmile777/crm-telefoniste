@@ -76,7 +76,37 @@ router.post('/voice', (req, res) => {
   let escaped = to.replace(/[^+0-9]/g, '');
   if (escaped.startsWith('00')) escaped = '+' + escaped.slice(2);
   else if (!escaped.startsWith('+')) escaped = '+39' + escaped; // default Italia
-  res.send(`<Response><Dial callerId="${callerId}" answerOnBridge="true"><Number>${escaped}</Number></Dial></Response>`);
+  const reg = db.prepare("SELECT value FROM settings WHERE key='registrazione'").get();
+  const recAttr = reg && reg.value === '1'
+    ? ` record="record-from-answer-dual" recordingStatusCallback="https://crm-telefoniste.onrender.com/api/twilio/recording"`
+    : '';
+  res.send(`<Response><Dial callerId="${callerId}" answerOnBridge="true"${recAttr}><Number>${escaped}</Number></Dial></Response>`);
+});
+
+// Webhook Twilio: registrazione completata
+router.post('/recording', (req, res) => {
+  const { CallSid, RecordingSid, RecordingDuration, RecordingStatus } = req.body || {};
+  if (RecordingStatus === 'completed' && CallSid && RecordingSid) {
+    db.prepare('UPDATE calls SET recording_sid=?, recording_dur=? WHERE twilio_sid=?')
+      .run(RecordingSid, parseInt(RecordingDuration) || 0, CallSid);
+  }
+  res.sendStatus(200);
+});
+
+// Proxy audio registrazione (admin: tutte; operatrice: solo le proprie)
+router.get('/recordings/:callId', requireAuth, async (req, res) => {
+  const call = db.prepare('SELECT * FROM calls WHERE id=?').get(req.params.callId);
+  if (!call || !call.recording_sid) return res.status(404).json({ error: 'Registrazione non trovata' });
+  if (req.user.ruolo !== 'admin' && call.user_id !== req.user.id) return res.status(403).json({ error: 'Non autorizzato' });
+  try {
+    const url = `https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}/Recordings/${call.recording_sid}.mp3`;
+    const r = await fetch(url, { headers: { Authorization: 'Basic ' + Buffer.from(TWILIO_API_KEY + ':' + TWILIO_API_SECRET).toString('base64') } });
+    if (!r.ok) return res.status(502).json({ error: 'Twilio: ' + r.status });
+    res.setHeader('Content-Type', 'audio/mpeg');
+    res.send(Buffer.from(await r.arrayBuffer()));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 module.exports = router;

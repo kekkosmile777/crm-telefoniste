@@ -76,21 +76,21 @@ router.get('/campaigns', (req, res) => {
 });
 
 router.post('/campaigns', (req, res) => {
-  const { nome, descrizione, note, modalita, obiettivo_app, max_tentativi, tipo, raggio_km } = req.body;
+  const { nome, descrizione, note, copione, modalita, obiettivo_app, max_tentativi, tipo, raggio_km } = req.body;
   if (!nome) return res.status(400).json({ error: 'Nome obbligatorio' });
   const tipoOk = ['manuale', 'predictive', 'geo'].includes(tipo) ? tipo : 'manuale';
-  const r = db.prepare('INSERT INTO campaigns (nome, descrizione, note, modalita, obiettivo_app, max_tentativi, tipo, raggio_km) VALUES (?,?,?,?,?,?,?,?)')
-    .run(nome, descrizione || '', note || '', modalita === 'assegnata' ? 'assegnata' : 'coda', parseInt(obiettivo_app) || 0, parseInt(max_tentativi) || 3, tipoOk, parseInt(raggio_km) || 25);
+  const r = db.prepare('INSERT INTO campaigns (nome, descrizione, note, copione, modalita, obiettivo_app, max_tentativi, tipo, raggio_km) VALUES (?,?,?,?,?,?,?,?,?)')
+    .run(nome, descrizione || '', note || '', copione || '', modalita === 'assegnata' ? 'assegnata' : 'coda', parseInt(obiettivo_app) || 0, parseInt(max_tentativi) || 3, tipoOk, parseInt(raggio_km) || 25);
   res.json({ id: r.lastInsertRowid });
 });
 
 router.put('/campaigns/:id', (req, res) => {
   const c = db.prepare('SELECT * FROM campaigns WHERE id=?').get(req.params.id);
   if (!c) return res.status(404).json({ error: 'Campagna non trovata' });
-  const { nome, descrizione, note, modalita, obiettivo_app, max_tentativi, stato, tipo, raggio_km } = req.body;
+  const { nome, descrizione, note, copione, modalita, obiettivo_app, max_tentativi, stato, tipo, raggio_km } = req.body;
   const stati = ['bozza','attiva','in_pausa','completata','archiviata'];
-  db.prepare('UPDATE campaigns SET nome=?, descrizione=?, note=?, modalita=?, obiettivo_app=?, max_tentativi=?, stato=?, tipo=?, raggio_km=? WHERE id=?')
-    .run(nome ?? c.nome, descrizione ?? c.descrizione, note ?? c.note,
+  db.prepare('UPDATE campaigns SET nome=?, descrizione=?, note=?, copione=?, modalita=?, obiettivo_app=?, max_tentativi=?, stato=?, tipo=?, raggio_km=? WHERE id=?')
+    .run(nome ?? c.nome, descrizione ?? c.descrizione, note ?? c.note, copione ?? c.copione,
          ['coda','assegnata'].includes(modalita) ? modalita : c.modalita,
          obiettivo_app != null ? parseInt(obiettivo_app) || 0 : c.obiettivo_app,
          max_tentativi != null ? parseInt(max_tentativi) || 3 : c.max_tentativi,
@@ -291,7 +291,60 @@ router.get('/reports/summary', (req, res) => {
       SUM(CASE WHEN esito='appuntamento_fissato' THEN 1 ELSE 0 END) appuntamenti
     FROM calls ${w}`).get(params);
 
-  res.json({ totali, perOperatore, perEsito, perCampagna, perGiorno: perGiorno.reverse() });
+  // produttivita': tempo per stato (dal log presenze)
+  const wl = [];
+  const pl = {};
+  if (from) { wl.push('l.started_at >= @from'); pl.from = from; }
+  if (to) { wl.push("l.started_at <= @to || ' 23:59:59'"); pl.to = to; }
+  const wls = wl.length ? 'WHERE ' + wl.join(' AND ') : '';
+  const produttivita = db.prepare(`
+    SELECT u.nome, l.stato,
+      SUM((julianday(COALESCE(l.ended_at, l.last_beat)) - julianday(l.started_at)) * 86400) sec
+    FROM user_status_log l JOIN users u ON u.id = l.user_id
+    ${wls} GROUP BY l.user_id, l.stato`).all(pl);
+
+  res.json({ totali, perOperatore, perEsito, perCampagna, perGiorno: perGiorno.reverse(), produttivita });
+});
+
+/* ---------- EXPORT EXCEL (CSV compatibile) ---------- */
+function csvExcel(res, filename, intestazioni, righe) {
+  const esc = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
+  const csv = '\ufeffsep=;\n' + intestazioni.join(';') + '\n' + righe.map(r => r.map(esc).join(';')).join('\n');
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.send(csv);
+}
+
+router.get('/calls-export.csv', (req, res) => {
+  const { from = '', to = '' } = req.query;
+  const where = []; const params = {};
+  if (from) { where.push('c.started_at >= @from'); params.from = from; }
+  if (to) { where.push("c.started_at <= @to || ' 23:59:59'"); params.to = to; }
+  const w = where.length ? 'WHERE ' + where.join(' AND ') : '';
+  const rows = db.prepare(`
+    SELECT c.started_at, u.nome operatore, ct.nome, ct.cognome, ct.telefono, ct.comune, cp.nome campagna, c.durata, c.esito, c.note
+    FROM calls c JOIN contacts ct ON ct.id=c.contact_id JOIN users u ON u.id=c.user_id LEFT JOIN campaigns cp ON cp.id=c.campaign_id
+    ${w} ORDER BY c.started_at DESC LIMIT 50000`).all(params);
+  csvExcel(res, `chiamate-${new Date().toISOString().slice(0,10)}.csv`,
+    ['Data e ora','Operatrice','Nome','Cognome','Telefono','Comune','Campagna','Durata (sec)','Esito','Note'],
+    rows.map(r => [r.started_at, r.operatore, r.nome, r.cognome, r.telefono, r.comune, r.campagna, r.durata, r.esito, r.note]));
+});
+
+router.get('/report-export.csv', (req, res) => {
+  const { from = '', to = '' } = req.query;
+  const where = []; const params = {};
+  if (from) { where.push('c.started_at >= @from'); params.from = from; }
+  if (to) { where.push("c.started_at <= @to || ' 23:59:59'"); params.to = to; }
+  const w = where.length ? 'WHERE ' + where.join(' AND ') : '';
+  const rows = db.prepare(`
+    SELECT u.nome operatore, COUNT(c.id) chiamate, COALESCE(SUM(c.durata),0) sec, COALESCE(AVG(c.durata),0) media,
+      SUM(CASE WHEN c.esito='appuntamento_fissato' THEN 1 ELSE 0 END) appuntamenti,
+      SUM(CASE WHEN c.esito='richiamo' THEN 1 ELSE 0 END) richiami,
+      SUM(CASE WHEN c.esito='non_interessato' THEN 1 ELSE 0 END) non_interessati
+    FROM calls c JOIN users u ON u.id=c.user_id ${w} GROUP BY c.user_id ORDER BY chiamate DESC`).all(params);
+  csvExcel(res, `report-operatrici-${new Date().toISOString().slice(0,10)}.csv`,
+    ['Operatrice','Chiamate','Tempo totale (sec)','Durata media (sec)','Appuntamenti','Richiami','Non interessati','Conversione %'],
+    rows.map(r => [r.operatore, r.chiamate, r.sec, Math.round(r.media), r.appuntamenti, r.richiami, r.non_interessati, r.chiamate ? (100*r.appuntamenti/r.chiamate).toFixed(1) : 0]));
 });
 
 /* ---------- DASHBOARD ---------- */

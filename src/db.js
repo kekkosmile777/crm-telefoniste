@@ -134,7 +134,19 @@ for (const sql of [
   "ALTER TABLE users ADD COLUMN permessi TEXT",
   "ALTER TABLE users ADD COLUMN orario_dal TEXT",
   "ALTER TABLE users ADD COLUMN orario_al TEXT",
-  "ALTER TABLE users ADD COLUMN orario_settimana TEXT"
+  "ALTER TABLE users ADD COLUMN orario_settimana TEXT",
+  "ALTER TABLE campaigns ADD COLUMN copione TEXT",
+  "ALTER TABLE calls ADD COLUMN recording_sid TEXT",
+  "ALTER TABLE calls ADD COLUMN recording_dur INTEGER",
+  `CREATE TABLE IF NOT EXISTS user_status_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    stato TEXT NOT NULL,
+    started_at TEXT NOT NULL DEFAULT (datetime('now')),
+    ended_at TEXT,
+    last_beat TEXT NOT NULL DEFAULT (datetime('now'))
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_usl_user ON user_status_log(user_id, started_at)"
 ]) { try { db.exec(sql); } catch {} }
 
 // Distanza haversine in km, usabile nelle query SQL

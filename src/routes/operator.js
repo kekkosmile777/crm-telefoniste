@@ -16,7 +16,7 @@ function releaseStaleLocks() {
 router.get('/campaigns', (req, res) => {
   releaseStaleLocks();
   const rows = db.prepare(`
-    SELECT c.id, c.nome, c.descrizione, c.note, c.modalita, c.tipo, c.raggio_km,
+    SELECT c.id, c.nome, c.descrizione, c.note, c.copione, c.modalita, c.tipo, c.raggio_km,
       (SELECT COUNT(*) FROM campaign_contacts cc WHERE cc.campaign_id=c.id AND cc.stato='da_chiamare'
         AND (c.modalita='coda' OR cc.assigned_to = @uid)) AS da_fare,
       (SELECT COUNT(*) FROM campaign_contacts cc WHERE cc.campaign_id=c.id AND cc.stato='lavorato'
@@ -129,6 +129,25 @@ router.post('/calls/start', (req, res) => {
     .run(contact_id, campaign_id || null, req.user.id, mode === 'manuale' ? 'manuale' : 'twilio');
   db.prepare("UPDATE contacts SET esito='in_chiamata', updated_at=datetime('now') WHERE id=?").run(contact_id);
   res.json({ call_id: r.lastInsertRowid });
+});
+
+/* Salva il CallSid Twilio appena la chiamata è connessa (per la registrazione) */
+router.post('/calls/:id/sid', (req, res) => {
+  const { twilio_sid } = req.body || {};
+  if (twilio_sid) db.prepare('UPDATE calls SET twilio_sid=? WHERE id=? AND user_id=?').run(twilio_sid, req.params.id, req.user.id);
+  res.json({ ok: true });
+});
+
+/* Richiami in scadenza nei prossimi minuti (per avviso) */
+router.get('/callbacks/upcoming', (req, res) => {
+  const rows = db.prepare(`
+    SELECT cb.id, cb.richiamo_at, ct.nome, ct.cognome
+    FROM callbacks cb JOIN contacts ct ON ct.id = cb.contact_id
+    WHERE cb.stato='pendente' AND (cb.user_id = ? OR cb.user_id IS NULL)
+      AND cb.richiamo_at > datetime('now','localtime')
+      AND cb.richiamo_at <= datetime('now','localtime','+5 minutes')
+    ORDER BY cb.richiamo_at LIMIT 10`).all(req.user.id);
+  res.json(rows);
 });
 
 /* Fine chiamata + esito (obbligatorio) */
