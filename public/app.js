@@ -861,21 +861,21 @@ function bigliettoHtml(a) {
     ${riga(`${L('IGIENIZZ.')} <span style="flex:.2"></span> ${L('DIVANO')}${cb(ig.includes('divano'))} ${L('TAPPETO')}${cb(ig.includes('tappeto'))} ${L('MATERASSO')}${cb(ig.includes('materasso'))} ${L('COMPLETA')}${cb(ig.includes('completa'))}`)}
     ${riga(`${L('OFFERTA DA')} <span style="flex:1">${v(a.offerto_da)}</span> ${L('PARENTELA')} <span style="flex:1">${v(a.parentela)}</span>`)}
     ${riga(`${L('INDICAZIONI')} <span style="flex:1">${v(noteLines[0] || '')}</span>`)}
-    <div style="border-bottom:1px solid #000;padding:2px 4px;flex:1;min-height:26px;white-space:pre-wrap;overflow:hidden">${v(noteLines.slice(1).join('\n'))}</div>
+    <div style="border-bottom:1px solid #000;padding:2px 4px;flex:1;min-height:8px;white-space:pre-wrap;overflow:hidden">${v(noteLines.slice(1).join('\n'))}</div>
     ${riga(`${L('LAVORO M/M')} <span style="flex:1">${v(a.lavoro_mm)}</span> ${L('W.E')}${cb(a.flag_we)} ${L('PERS')}${cb(a.flag_pers)} ${L('CK')} <span style="width:44px">${v(a.ck)}</span>`)}
     ${riga(`${L('CONSULENTE')} <span style="flex:1">${v(a.agente)}</span>`)}
     <div style="padding:2px 4px;display:flex;gap:8px;align-items:baseline">${L('APP PRESO IL:')} <span style="flex:1">${v(fmtD(a.preso_il || (a.created_at || '').slice(0, 10)))}</span> ${L('TEL:')} <span style="flex:1">${v(a.telefono)}</span></div>
   </div>`;
 }
 
-/* Stampa: 6 bigliettini per foglio A4 (2 colonne x 3 righe), riempiti dall'alto a sinistra */
+/* Stampa: 8 bigliettini rettangolari per foglio A4 (2 colonne x 4 righe), riempiti dall'alto a sinistra */
 function stampaAppuntamenti(list) {
   if (!list || !list.length) return toast('Seleziona almeno un appuntamento', true);
   const pagine = [];
-  for (let i = 0; i < list.length; i += 6) pagine.push(list.slice(i, i + 6));
+  for (let i = 0; i < list.length; i += 8) pagine.push(list.slice(i, i + 8));
   const html = pagine.map((gruppo, pi) => `
-    <div style="width:194mm;height:277mm;display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr 1fr;gap:4mm;${pi < pagine.length - 1 ? 'page-break-after:always;' : ''}">
-      ${[0, 1, 2, 3, 4, 5].map(s => `<div style="overflow:hidden">${gruppo[s] ? bigliettoHtml(gruppo[s]) : ''}</div>`).join('')}
+    <div style="width:194mm;height:277mm;display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr 1fr 1fr;gap:3mm;${pi < pagine.length - 1 ? 'page-break-after:always;' : ''}">
+      ${[0, 1, 2, 3, 4, 5, 6, 7].map(s => `<div style="overflow:hidden">${gruppo[s] ? bigliettoHtml(gruppo[s]) : ''}</div>`).join('')}
     </div>`).join('');
   const w = window.open('', '_blank', 'width=900,height=760');
   if (!w) return toast('Sblocca i popup per stampare', true);
@@ -1865,7 +1865,7 @@ async function viewAppuntamentiOp() {
   if (opAll) opAll.onchange = () => document.querySelectorAll('.op-app-sel').forEach(c => c.checked = opAll.checked);
   const tb = document.createElement('div');
   tb.className = 'toolbar'; tb.style.marginTop = '10px';
-  tb.innerHTML = '<button class="btn" id="op-print-sel">🖨 Stampa selezionati (6 per foglio A4)</button>';
+  tb.innerHTML = '<button class="btn" id="op-print-sel">🖨 Stampa selezionati (8 per foglio A4)</button>';
   $('#view').appendChild(tb);
   $('#op-print-sel').onclick = () => {
     const ids = [...document.querySelectorAll('.op-app-sel:checked')].map(c => parseInt(c.value));
