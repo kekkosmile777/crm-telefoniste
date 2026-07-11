@@ -79,7 +79,7 @@ Tutte le chiamate di tutte le operatrici con filtri (esito, operatrice, campagna
 Tutti i richiami pendenti: quando è stata presa la nota e quando va richiamato (rosso se scaduto). Modificabili e annullabili. I richiami scaduti vengono proposti automaticamente alle operatrici prima della coda normale.
 
 ### 3.7 Appuntamenti
-Calendario mensile + lista. Ogni esito "Appuntamento fissato" ne crea uno automaticamente con data, ora, indirizzo e agente sul territorio. Stati: confermato / fatto / annullato.
+Calendario mensile + lista. Ogni esito "Appuntamento fissato" crea la **scheda appuntamento completa**: data, giorno, ora, nome, cognome, indirizzo con numero civico, città, telefonista, igienizzazione (spunte divano/tappeto/materasso/completa), offerta da, parentela, indicazioni per il consulente, lavoro M/M, spunte W.E e PERS, CK, consulente, "app preso il" (data di presa, modificabile) e telefono. Con il tasto **🖨** si stampa il modulo cartaceo identico a quello usato in ufficio (anche dal lato operatrice). Stati: confermato / fatto / annullato.
 
 ### 3.8 Report
 Filtrabile per periodo: totali (chiamate, appuntamenti, conversione %, durata media, ore al telefono), andamento giornaliero, esiti, tabella per operatrice, tabella per campagna e **⏱ Produttività** (tempo Disponibile / In chiamata / Post-chiamata / In pausa per operatrice + **chiamate/ora** sul tempo effettivo di lavoro). **📊 Export Excel**.

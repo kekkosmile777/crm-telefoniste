@@ -806,7 +806,7 @@ async function viewAppuntamenti() {
       <td>${esc((a.contatto_nome || '') + ' ' + (a.contatto_cognome || '')) || '—'}</td><td>${esc(a.telefono || '')}</td>
       <td>${esc(a.agente || '—')}</td><td>${esc(a.indirizzo || '')}</td><td>${esc(a.operatore || '—')}</td>
       <td><span class="tag ${a.stato === 'confermato' ? 'green' : a.stato === 'annullato' ? 'red' : ''}">${a.stato}</span></td>
-      <td style="white-space:nowrap"><button class="btn" data-edit-app="${a.id}">✏️</button> <button class="btn danger" data-del-app="${a.id}">🗑</button></td></tr>`;
+      <td style="white-space:nowrap"><button class="btn" data-print-app="${a.id}" title="Stampa modulo">🖨</button> <button class="btn" data-edit-app="${a.id}">✏️</button> <button class="btn danger" data-del-app="${a.id}">🗑</button></td></tr>`;
   }
 
   $('#cal-prev').onclick = () => { calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth() - 1, 1); viewAppuntamenti(); };
@@ -814,6 +814,7 @@ async function viewAppuntamenti() {
   $('#cal-today').onclick = () => { calMonth = new Date(); viewAppuntamenti(); };
   $('#app-new').onclick = () => appointmentForm(null, agents, () => viewAppuntamenti());
   $('#view').querySelectorAll('[data-edit-app]').forEach(b => b.onclick = () => appointmentForm(apps.find(a => a.id == b.dataset.editApp), agents, () => viewAppuntamenti()));
+  $('#view').querySelectorAll('[data-print-app]').forEach(b => b.onclick = () => stampaAppuntamento(apps.find(a => a.id == b.dataset.printApp)));
   $('#view').querySelectorAll('[data-del-app]').forEach(b => b.onclick = async () => {
     if (!confirm('Eliminare appuntamento?')) return;
     await api('/admin/appointments/' + b.dataset.delApp, { method: 'DELETE' }); toast('Eliminato'); viewAppuntamenti();
@@ -827,23 +828,78 @@ async function viewAppuntamenti() {
   });
 }
 
+function giornoIt(d) {
+  if (!d) return '';
+  const g = ['Domenica', 'Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato'];
+  const dt = new Date(d + 'T00:00:00');
+  return isNaN(dt) ? '' : g[dt.getDay()];
+}
+
+/* Stampa del modulo appuntamento (replica del modulo cartaceo) */
+function stampaAppuntamento(a) {
+  let ig = []; try { ig = a.igienizzazione ? JSON.parse(a.igienizzazione) : []; } catch {}
+  const v = x => x == null ? '' : String(x).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  const cb = on => `<span style="display:inline-block;width:15px;height:15px;border:2px solid #000;text-align:center;line-height:13px;font-size:12px;font-weight:bold;vertical-align:middle;margin-left:4px">${on ? 'X' : '&nbsp;'}</span>`;
+  const riga = html => `<div style="border-bottom:2px solid #000;padding:8px 8px;display:flex;gap:20px;align-items:baseline;min-height:20px">${html}</div>`;
+  const L = t => `<b style="white-space:nowrap">${t}</b>`;
+  const noteLines = String(a.note || '').split('\n');
+  const w = window.open('', '_blank', 'width=880,height=720');
+  if (!w) return toast('Sblocca i popup per stampare', true);
+  w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Appuntamento ${v(a.contatto_cognome || '')}</title></head>
+  <body style="font-family:Arial,Helvetica,sans-serif;font-size:14.5px;margin:26px">
+  <div style="border:3px solid #000">
+    ${riga(`${L('DATA')} <span style="flex:1.2">${v(fmtD(a.data))}</span> ${L('GIORNO')} <span style="flex:1.2">${v(giornoIt(a.data))}</span> ${L('ORA')} <span style="flex:1">${v(a.ora)}</span>`)}
+    ${riga(`${L('NOME')} <span style="flex:1">${v(a.contatto_nome)}</span> ${L('COGNOME')} <span style="flex:1">${v(a.contatto_cognome)}</span>`)}
+    ${riga(`${L('INDIRIZZO')} <span style="flex:1">${v(a.indirizzo)}</span> ${L('N°')} <span style="width:90px">${v(a.civico)}</span>`)}
+    ${riga(`${L('CITTÀ')} <span style="flex:1">${v(a.citta)}</span> ${L('TELEFONISTA')} <span style="flex:1">${v(a.operatore || (typeof USER !== 'undefined' && USER ? USER.nome : ''))}</span>`)}
+    ${riga(`${L('IGIENIZZAZIONE')} <span style="flex:1"></span> ${L('DIVANO')}${cb(ig.includes('divano'))} <span style="flex:.4"></span> ${L('TAPPETO')}${cb(ig.includes('tappeto'))} <span style="flex:.4"></span> ${L('MATERASSO')}${cb(ig.includes('materasso'))} <span style="flex:.4"></span> ${L('COMPLETA')}${cb(ig.includes('completa'))}`)}
+    ${riga(`${L('OFFERTA DA')} <span style="flex:1">${v(a.offerto_da)}</span> ${L('PARENTELA')} <span style="flex:1">${v(a.parentela)}</span>`)}
+    ${riga(`${L('INDICAZIONI (da inserire)')} <span style="flex:1">${v(noteLines[0] || '')}</span>`)}
+    ${[1, 2, 3, 4, 5].map(i => riga(`<span style="flex:1">${v(noteLines[i] || '')}</span>`)).join('')}
+    ${riga(`${L('LAVORO M/M')} <span style="flex:1">${v(a.lavoro_mm)}</span> ${L('W.E')}${cb(a.flag_we)} <span style="flex:.3"></span> ${L('PERS')}${cb(a.flag_pers)} <span style="flex:.3"></span> ${L('CK')} <span style="width:110px">${v(a.ck)}</span>`)}
+    ${riga(`${L('CONSULENTE')} <span style="flex:1">${v(a.agente)}</span>`)}
+    <div style="padding:8px 8px;display:flex;gap:20px;align-items:baseline">${L('APP PRESO IL:')} <span style="flex:1">${v(fmtD(a.preso_il || (a.created_at || '').slice(0, 10)))}</span> ${L('TEL:')} <span style="flex:1">${v(a.telefono)}</span></div>
+  </div>
+  <script>window.onload = () => setTimeout(() => window.print(), 200)<\/script></body></html>`);
+  w.document.close();
+}
+
 function appointmentForm(a, agents, onSave) {
+  let igCur = []; try { igCur = a?.igienizzazione ? JSON.parse(a.igienizzazione) : []; } catch {}
+  const oggi = new Date().toISOString().slice(0, 10);
   openModal(a ? 'Modifica appuntamento' : 'Nuovo appuntamento', `
-    ${a?.contatto_nome ? `<p><b>${esc(a.contatto_nome + ' ' + (a.contatto_cognome || ''))}</b> — ${esc(a.telefono || '')}</p>` : ''}
+    ${a?.contatto_nome ? `<p><b>${esc(a.contatto_nome + ' ' + (a.contatto_cognome || ''))}</b> — ${esc(a.telefono || '')} ${a.offerto_da ? '· offerta da ' + esc(a.offerto_da) : ''} ${a.parentela ? '· ' + esc(a.parentela) : ''}</p>` : ''}
     <div class="form-grid">
       <div><label>Data *</label><input type="date" id="ap-data" style="width:100%" value="${a?.data || ''}"></div>
       <div><label>Ora</label><input type="time" id="ap-ora" style="width:100%" value="${a?.ora || ''}"></div>
       <div class="full"><label>Indirizzo</label><input id="ap-ind" style="width:100%" value="${esc(a?.indirizzo || '')}"></div>
-      <div><label>Agente</label><select id="ap-agente" style="width:100%"><option value="">— Nessuno —</option>${agents.map(g => `<option value="${g.id}" ${a?.agent_id == g.id ? 'selected' : ''}>${esc(g.nome)}</option>`).join('')}</select></div>
+      <div><label>N° civico</label><input id="ap-civ" style="width:100%" value="${esc(a?.civico || '')}"></div>
+      <div><label>Città</label><input id="ap-citta" style="width:100%" value="${esc(a?.citta || '')}"></div>
+      <div class="full"><label>Igienizzazione</label>
+        <div style="display:flex;gap:16px;flex-wrap:wrap">
+          ${['divano','tappeto','materasso','completa'].map(k => `<label style="margin:0;display:flex;align-items:center;gap:5px;color:var(--text);font-size:13px"><input type="checkbox" class="ap-ig" value="${k}" ${igCur.includes(k) ? 'checked' : ''}> ${k.toUpperCase()}</label>`).join('')}
+        </div></div>
+      <div class="full"><label>Indicazioni (per il consulente)</label><textarea id="ap-note">${esc(a?.note || '')}</textarea></div>
+      <div><label>Lavoro M/M (marito/moglie)</label><input id="ap-lav" style="width:100%" value="${esc(a?.lavoro_mm || '')}"></div>
+      <div><label>CK</label><input id="ap-ck" style="width:100%" value="${esc(a?.ck || '')}"></div>
+      <div class="full" style="display:flex;gap:18px">
+        <label style="margin:0;display:flex;align-items:center;gap:5px;color:var(--text);font-size:13px"><input type="checkbox" id="ap-we" ${a?.flag_we ? 'checked' : ''}> W.E</label>
+        <label style="margin:0;display:flex;align-items:center;gap:5px;color:var(--text);font-size:13px"><input type="checkbox" id="ap-pers" ${a?.flag_pers ? 'checked' : ''}> PERS</label>
+      </div>
+      <div><label>Consulente</label><select id="ap-agente" style="width:100%"><option value="">— Nessuno —</option>${agents.map(g => `<option value="${g.id}" ${a?.agent_id == g.id ? 'selected' : ''}>${esc(g.nome)}</option>`).join('')}</select></div>
       <div><label>Stato</label><select id="ap-stato" style="width:100%">${['confermato','fatto','annullato'].map(s => `<option ${a?.stato === s ? 'selected' : ''}>${s}</option>`).join('')}</select></div>
-      <div class="full"><label>Note</label><textarea id="ap-note">${esc(a?.note || '')}</textarea></div>
+      <div><label>App preso il</label><input type="date" id="ap-preso" style="width:100%" value="${a?.preso_il || (a?.created_at || '').slice(0, 10) || oggi}"></div>
     </div>
     <div class="modal-actions">
+      ${a ? '<button class="btn" id="ap-print" style="margin-right:auto">🖨 Stampa modulo</button>' : ''}
       <button class="btn" onclick="closeModal()">Annulla</button>
       <button class="btn primary" id="ap-save">💾 Salva</button>
     </div>`);
+  if (a) $('#ap-print').onclick = () => stampaAppuntamento(a);
   $('#ap-save').onclick = async () => {
-    const body = { data: $('#ap-data').value, ora: $('#ap-ora').value, indirizzo: $('#ap-ind').value, agent_id: $('#ap-agente').value ? parseInt($('#ap-agente').value) : null, stato: $('#ap-stato').value, note: $('#ap-note').value };
+    const body = { data: $('#ap-data').value, ora: $('#ap-ora').value, indirizzo: $('#ap-ind').value, agent_id: $('#ap-agente').value ? parseInt($('#ap-agente').value) : null, stato: $('#ap-stato').value, note: $('#ap-note').value,
+      civico: $('#ap-civ').value, citta: $('#ap-citta').value, igienizzazione: [...document.querySelectorAll('.ap-ig:checked')].map(x => x.value),
+      lavoro_mm: $('#ap-lav').value, ck: $('#ap-ck').value, flag_we: $('#ap-we').checked, flag_pers: $('#ap-pers').checked, preso_il: $('#ap-preso').value };
     if (!body.data) return toast('Data obbligatoria', true);
     try {
       if (a) await api('/admin/appointments/' + a.id, { method: 'PUT', body });
@@ -1669,12 +1725,28 @@ function renderEsitoForm() {
           </div>
           <label>Note richiamo</label><input id="ws-cb-note" style="width:100%" placeholder="es. preferisce il pomeriggio">`;
       } else if (esito === 'appuntamento_fissato') {
+        const c0 = WS.current?.contact || {};
+        const oggi = new Date().toISOString().slice(0, 10);
         extra.innerHTML = `
           <div class="form-grid">
             <div><label>📅 Data appuntamento *</label><input type="date" id="ws-ap-data" value="${domani}" style="width:100%"></div>
             <div><label>Ora</label><input type="time" id="ws-ap-ora" style="width:100%"></div>
             <div class="full"><label>Indirizzo</label><input id="ws-ap-ind" style="width:100%"></div>
-            <div class="full"><label>Agente</label><select id="ws-ap-agente" style="width:100%"><option value="">— da assegnare —</option>${agents.map(a => `<option value="${a.id}">${esc(a.nome)}${a.zone ? ' (' + esc(a.zone) + ')' : ''}</option>`).join('')}</select></div>
+            <div><label>N° civico</label><input id="ws-ap-civ" style="width:100%"></div>
+            <div><label>Città</label><input id="ws-ap-citta" style="width:100%" value="${esc(c0.comune || '')}"></div>
+            <div class="full"><label>Igienizzazione</label>
+              <div style="display:flex;gap:14px;flex-wrap:wrap">
+                ${['divano','tappeto','materasso','completa'].map(k => `<label style="margin:0;display:flex;align-items:center;gap:5px;color:var(--text);font-size:13px;cursor:pointer"><input type="checkbox" class="ws-ap-ig" value="${k}"> ${k.toUpperCase()}</label>`).join('')}
+              </div></div>
+            <div class="full"><label>Indicazioni (per il consulente)</label><textarea id="ws-ap-note" placeholder="come arrivare, cosa portare, dettagli..."></textarea></div>
+            <div><label>Lavoro M/M (marito/moglie)</label><input id="ws-ap-lav" style="width:100%"></div>
+            <div><label>CK</label><input id="ws-ap-ck" style="width:100%"></div>
+            <div class="full" style="display:flex;gap:18px;margin-top:2px">
+              <label style="margin:0;display:flex;align-items:center;gap:5px;color:var(--text);font-size:13px;cursor:pointer"><input type="checkbox" id="ws-ap-we"> W.E</label>
+              <label style="margin:0;display:flex;align-items:center;gap:5px;color:var(--text);font-size:13px;cursor:pointer"><input type="checkbox" id="ws-ap-pers"> PERS</label>
+            </div>
+            <div><label>Consulente</label><select id="ws-ap-agente" style="width:100%"><option value="">— da assegnare —</option>${agents.map(a => `<option value="${a.id}">${esc(a.nome)}${a.zone ? ' (' + esc(a.zone) + ')' : ''}</option>`).join('')}</select></div>
+            <div><label>App preso il</label><input type="date" id="ws-ap-preso" value="${oggi}" style="width:100%"></div>
           </div>`;
       } else extra.innerHTML = '';
     });
@@ -1695,7 +1767,13 @@ function renderEsitoForm() {
         if (!body.richiamo_at) return toast('Imposta data e ora del richiamo', true);
       }
       if (esito === 'appuntamento_fissato') {
-        body.appuntamento = { data: $('#ws-ap-data')?.value, ora: $('#ws-ap-ora')?.value, indirizzo: $('#ws-ap-ind')?.value, agent_id: $('#ws-ap-agente')?.value ? parseInt($('#ws-ap-agente').value) : null };
+        body.appuntamento = { data: $('#ws-ap-data')?.value, ora: $('#ws-ap-ora')?.value, indirizzo: $('#ws-ap-ind')?.value,
+          agent_id: $('#ws-ap-agente')?.value ? parseInt($('#ws-ap-agente').value) : null,
+          civico: $('#ws-ap-civ')?.value, citta: $('#ws-ap-citta')?.value,
+          igienizzazione: [...document.querySelectorAll('.ws-ap-ig:checked')].map(x => x.value),
+          note: $('#ws-ap-note')?.value, lavoro_mm: $('#ws-ap-lav')?.value, ck: $('#ws-ap-ck')?.value,
+          flag_we: $('#ws-ap-we')?.checked || false, flag_pers: $('#ws-ap-pers')?.checked || false,
+          preso_il: $('#ws-ap-preso')?.value };
         if (!body.appuntamento.data) return toast('Imposta la data dell\'appuntamento', true);
       }
       try {
@@ -1752,12 +1830,14 @@ async function viewAppuntamentiOp() {
   $('#view').innerHTML = `
     <h2 class="page-title">I miei <em>Appuntamenti</em></h2>
     <div class="table-wrap"><table>
-      <tr><th>Data</th><th>Ora</th><th>Contatto</th><th>Telefono</th><th>Agente</th><th>Indirizzo</th><th>Stato</th></tr>
+      <tr><th>Data</th><th>Ora</th><th>Contatto</th><th>Telefono</th><th>Consulente</th><th>Indirizzo</th><th>Stato</th><th></th></tr>
       ${rows.map(a => `<tr><td>${fmtD(a.data)}</td><td>${a.ora || '—'}</td>
         <td>${esc((a.contatto_nome || '') + ' ' + (a.contatto_cognome || ''))}</td><td>${esc(a.telefono || '')}</td>
         <td>${esc(a.agente || '—')}</td><td>${esc(a.indirizzo || '')}</td>
-        <td><span class="tag ${a.stato === 'confermato' ? 'green' : a.stato === 'annullato' ? 'red' : ''}">${a.stato}</span></td></tr>`).join('') || '<tr><td colspan="7" class="muted">Nessun appuntamento</td></tr>'}
+        <td><span class="tag ${a.stato === 'confermato' ? 'green' : a.stato === 'annullato' ? 'red' : ''}">${a.stato}</span></td>
+        <td><button class="btn" data-print-op="${a.id}" title="Stampa modulo">🖨</button></td></tr>`).join('') || '<tr><td colspan="8" class="muted">Nessun appuntamento</td></tr>'}
     </table></div>`;
+  $('#view').querySelectorAll('[data-print-op]').forEach(b => b.onclick = () => stampaAppuntamento(rows.find(a => a.id == b.dataset.printOp)));
 }
 
 

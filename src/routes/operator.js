@@ -220,8 +220,13 @@ router.post('/calls/:id/end', (req, res) => {
     // nuovo appuntamento
     if (esito === 'appuntamento_fissato') {
       if (!appuntamento || !appuntamento.data) throw new Error('Data appuntamento obbligatoria');
-      db.prepare('INSERT INTO appointments (contact_id, agent_id, user_id, data, ora, indirizzo, note) VALUES (?,?,?,?,?,?,?)')
-        .run(call.contact_id, appuntamento.agent_id || null, req.user.id, appuntamento.data, appuntamento.ora || '', appuntamento.indirizzo || '', appuntamento.note || '');
+      db.prepare(`INSERT INTO appointments (contact_id, agent_id, user_id, data, ora, indirizzo, civico, citta, igienizzazione, lavoro_mm, flag_we, flag_pers, ck, preso_il, note)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+        .run(call.contact_id, appuntamento.agent_id || null, req.user.id, appuntamento.data, appuntamento.ora || '', appuntamento.indirizzo || '',
+          appuntamento.civico || '', appuntamento.citta || '',
+          Array.isArray(appuntamento.igienizzazione) && appuntamento.igienizzazione.length ? JSON.stringify(appuntamento.igienizzazione) : null,
+          appuntamento.lavoro_mm || '', appuntamento.flag_we ? 1 : 0, appuntamento.flag_pers ? 1 : 0, appuntamento.ck || '',
+          appuntamento.preso_il || new Date().toISOString().slice(0, 10), appuntamento.note || '');
     }
   });
 
@@ -251,7 +256,7 @@ router.get('/callbacks', (req, res) => {
 /* I miei appuntamenti */
 router.get('/appointments', (req, res) => {
   const rows = db.prepare(`
-    SELECT a.*, ct.nome AS contatto_nome, ct.cognome AS contatto_cognome, ct.telefono, ag.nome AS agente
+    SELECT a.*, ct.nome AS contatto_nome, ct.cognome AS contatto_cognome, ct.telefono, ct.offerto_da, ct.parentela, ag.nome AS agente
     FROM appointments a LEFT JOIN contacts ct ON ct.id=a.contact_id LEFT JOIN agents ag ON ag.id=a.agent_id
     WHERE a.user_id = ? AND a.data >= date('now','localtime','-7 days') ORDER BY a.data, a.ora`).all(req.user.id);
   res.json(rows);

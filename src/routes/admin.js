@@ -218,7 +218,7 @@ router.get('/appointments', (req, res) => {
   if (to) { where.push('a.data <= @to'); params.to = to; }
   const w = where.length ? 'WHERE ' + where.join(' AND ') : '';
   const rows = db.prepare(`
-    SELECT a.*, ct.nome AS contatto_nome, ct.cognome AS contatto_cognome, ct.telefono, ct.offerto_da,
+    SELECT a.*, ct.nome AS contatto_nome, ct.cognome AS contatto_cognome, ct.telefono, ct.offerto_da, ct.parentela,
            ag.nome AS agente, u.nome AS operatore
     FROM appointments a
     LEFT JOIN contacts ct ON ct.id = a.contact_id
@@ -228,19 +228,26 @@ router.get('/appointments', (req, res) => {
   res.json(rows);
 });
 router.post('/appointments', (req, res) => {
-  const { contact_id, agent_id, data, ora, indirizzo, note } = req.body;
+  const { contact_id, agent_id, data, ora, indirizzo, note, civico, citta, igienizzazione, lavoro_mm, flag_we, flag_pers, ck, preso_il } = req.body;
   if (!data) return res.status(400).json({ error: 'Data obbligatoria' });
-  const r = db.prepare('INSERT INTO appointments (contact_id, agent_id, user_id, data, ora, indirizzo, note) VALUES (?,?,?,?,?,?,?)')
-    .run(contact_id || null, agent_id || null, req.user.id, data, ora || '', indirizzo || '', note || '');
+  const r = db.prepare(`INSERT INTO appointments (contact_id, agent_id, user_id, data, ora, indirizzo, civico, citta, igienizzazione, lavoro_mm, flag_we, flag_pers, ck, preso_il, note)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+    .run(contact_id || null, agent_id || null, req.user.id, data, ora || '', indirizzo || '', civico || '', citta || '',
+      Array.isArray(igienizzazione) && igienizzazione.length ? JSON.stringify(igienizzazione) : null,
+      lavoro_mm || '', flag_we ? 1 : 0, flag_pers ? 1 : 0, ck || '', preso_il || new Date().toISOString().slice(0, 10), note || '');
   res.json({ id: r.lastInsertRowid });
 });
 router.put('/appointments/:id', (req, res) => {
   const a = db.prepare('SELECT * FROM appointments WHERE id=?').get(req.params.id);
   if (!a) return res.status(404).json({ error: 'Appuntamento non trovato' });
-  const { agent_id, data, ora, indirizzo, note, stato } = req.body;
-  db.prepare('UPDATE appointments SET agent_id=?, data=?, ora=?, indirizzo=?, note=?, stato=? WHERE id=?')
+  const { agent_id, data, ora, indirizzo, note, stato, civico, citta, igienizzazione, lavoro_mm, flag_we, flag_pers, ck, preso_il } = req.body;
+  db.prepare(`UPDATE appointments SET agent_id=?, data=?, ora=?, indirizzo=?, note=?, stato=?, civico=?, citta=?, igienizzazione=?, lavoro_mm=?, flag_we=?, flag_pers=?, ck=?, preso_il=? WHERE id=?`)
     .run(agent_id !== undefined ? agent_id : a.agent_id, data ?? a.data, ora ?? a.ora, indirizzo ?? a.indirizzo,
-         note ?? a.note, ['confermato','annullato','fatto'].includes(stato) ? stato : a.stato, req.params.id);
+         note ?? a.note, ['confermato','annullato','fatto'].includes(stato) ? stato : a.stato,
+         civico ?? a.civico, citta ?? a.citta,
+         igienizzazione !== undefined ? (Array.isArray(igienizzazione) && igienizzazione.length ? JSON.stringify(igienizzazione) : null) : a.igienizzazione,
+         lavoro_mm ?? a.lavoro_mm, flag_we !== undefined ? (flag_we ? 1 : 0) : a.flag_we, flag_pers !== undefined ? (flag_pers ? 1 : 0) : a.flag_pers,
+         ck ?? a.ck, preso_il ?? a.preso_il, req.params.id);
   res.json({ ok: true });
 });
 router.delete('/appointments/:id', (req, res) => {
