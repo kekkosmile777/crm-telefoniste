@@ -1298,6 +1298,7 @@ async function viewPostazione() {
     nextContact();
   };
   if (WS.autoNext) { WS.autoNext = false; nextContact().then(() => { if (WS.current) startCall(); }); }
+  else if (WS.advanceOnly) { WS.advanceOnly = false; nextContact(); }
   if (WS.current) renderContact(); // ripristina se si torna sulla vista
 }
 
@@ -1595,6 +1596,9 @@ function renderEsitoForm() {
         if (camp?.tipo === 'predictive' && CURRENT_VIEW === 'postazione') {
           WS.autoNext = true;
           toast('Esito salvato ✓ — parte la prossima chiamata...');
+        } else if (camp?.tipo === 'geo' && CURRENT_VIEW === 'postazione' && WS.geoCenter) {
+          WS.advanceOnly = true;
+          toast('Esito salvato ✓ — ecco il prossimo contatto della zona');
         } else {
           toast('Esito salvato ✓');
         }
