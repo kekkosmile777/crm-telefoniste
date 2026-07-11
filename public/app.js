@@ -810,7 +810,7 @@ async function viewAppuntamenti() {
       <td>${esc((a.contatto_nome || '') + ' ' + (a.contatto_cognome || '')) || '—'}</td><td>${esc(a.telefono || '')}</td>
       <td>${esc(a.agente || '—')}</td><td>${esc(a.indirizzo || '')}</td><td>${esc(a.operatore || '—')}</td>
       <td><span class="tag ${a.stato === 'confermato' ? 'green' : a.stato === 'annullato' ? 'red' : ''}">${a.stato}</span></td>
-      <td style="white-space:nowrap"><button class="btn" data-print-app="${a.id}" title="Stampa modulo">🖨</button> <button class="btn" data-edit-app="${a.id}">✏️</button> <button class="btn danger" data-del-app="${a.id}">🗑</button></td></tr>`;
+      <td style="white-space:nowrap"><button class="btn" data-print-app="${a.id}" title="Stampa modulo">🖨</button> <button class="btn" data-dup-app="${a.id}" title="Duplica">📋</button> <button class="btn" data-edit-app="${a.id}">✏️</button> <button class="btn danger" data-del-app="${a.id}">🗑</button></td></tr>`;
   }
 
   $('#cal-prev').onclick = () => { calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth() - 1, 1); viewAppuntamenti(); };
@@ -819,6 +819,10 @@ async function viewAppuntamenti() {
   $('#app-new').onclick = () => appointmentForm(null, agents, () => viewAppuntamenti());
   $('#view').querySelectorAll('[data-edit-app]').forEach(b => b.onclick = () => appointmentForm(apps.find(a => a.id == b.dataset.editApp), agents, () => viewAppuntamenti()));
   $('#view').querySelectorAll('[data-print-app]').forEach(b => b.onclick = () => stampaAppuntamento(apps.find(a => a.id == b.dataset.printApp)));
+  $('#view').querySelectorAll('[data-dup-app]').forEach(b => b.onclick = () => {
+    const orig = apps.find(a => a.id == b.dataset.dupApp);
+    appointmentForm({ ...orig, id: null, stato: 'confermato' }, agents, () => viewAppuntamenti());
+  });
   const selAll = $('#app-sel-all');
   if (selAll) selAll.onchange = () => document.querySelectorAll('.app-sel').forEach(c => c.checked = selAll.checked);
   $('#app-print-sel').onclick = () => {
@@ -833,8 +837,15 @@ async function viewAppuntamenti() {
     const day = c.dataset.day;
     const dayApps = apps.filter(a => a.data === day);
     openModal('Appuntamenti del ' + fmtD(day), dayApps.length
-      ? `<div class="table-wrap"><table>${dayApps.map(a => `<tr><td>${a.ora || '—'}</td><td>${esc(a.contatto_nome || '')}</td><td>${esc(a.indirizzo || '')}</td><td>${esc(a.agente || '—')}</td><td><span class="tag">${a.stato}</span></td></tr>`).join('')}</table></div>`
+      ? `<div class="table-wrap"><table>${dayApps.map(a => `<tr><td>${a.ora || '—'}</td><td>${esc((a.contatto_nome || '') + ' ' + (a.contatto_cognome || ''))}</td><td>${esc(a.indirizzo || '')}</td><td>${esc(a.agente || '—')}</td><td><span class="tag ${a.stato === 'confermato' ? 'green' : a.stato === 'annullato' ? 'red' : ''}">${a.stato}</span></td>
+        <td style="white-space:nowrap"><button class="btn" data-day-edit="${a.id}">✏️ Modifica</button> <button class="btn" data-day-print="${a.id}">🖨</button></td></tr>`).join('')}</table></div>`
       : '<p class="muted">Nessun appuntamento in questo giorno.</p>');
+    document.querySelectorAll('[data-day-edit]').forEach(b => b.onclick = () => {
+      const a = apps.find(x => x.id == b.dataset.dayEdit);
+      closeModal();
+      appointmentForm(a, agents, () => viewAppuntamenti());
+    });
+    document.querySelectorAll('[data-day-print]').forEach(b => b.onclick = () => stampaAppuntamento(apps.find(x => x.id == b.dataset.dayPrint)));
   });
 }
 
@@ -890,7 +901,7 @@ function stampaAppuntamento(a) { stampaAppuntamenti([a]); }
 function appointmentForm(a, agents, onSave) {
   let igCur = []; try { igCur = a?.igienizzazione ? JSON.parse(a.igienizzazione) : []; } catch {}
   const oggi = new Date().toISOString().slice(0, 10);
-  openModal(a ? 'Modifica appuntamento' : 'Nuovo appuntamento', `
+  openModal(a ? (a.id ? 'Modifica appuntamento' : '📋 Duplica appuntamento') : 'Nuovo appuntamento', `
     ${a?.contatto_nome ? `<p><b>${esc(a.contatto_nome + ' ' + (a.contatto_cognome || ''))}</b> — ${esc(a.telefono || '')} ${a.offerto_da ? '· offerta da ' + esc(a.offerto_da) : ''} ${a.parentela ? '· ' + esc(a.parentela) : ''}</p>` : ''}
     <div class="form-grid">
       <div><label>Data *</label><input type="date" id="ap-data" style="width:100%" value="${a?.data || ''}"></div>
@@ -914,19 +925,19 @@ function appointmentForm(a, agents, onSave) {
       <div><label>App preso il</label><input type="date" id="ap-preso" style="width:100%" value="${a?.preso_il || (a?.created_at || '').slice(0, 10) || oggi}"></div>
     </div>
     <div class="modal-actions">
-      ${a ? '<button class="btn" id="ap-print" style="margin-right:auto">🖨 Stampa modulo</button>' : ''}
+      ${a && a.id ? '<button class="btn" id="ap-print" style="margin-right:auto">🖨 Stampa modulo</button>' : ''}
       <button class="btn" onclick="closeModal()">Annulla</button>
       <button class="btn primary" id="ap-save">💾 Salva</button>
     </div>`);
-  if (a) $('#ap-print').onclick = () => stampaAppuntamento(a);
+  if (a && a.id) $('#ap-print').onclick = () => stampaAppuntamento(a);
   $('#ap-save').onclick = async () => {
     const body = { data: $('#ap-data').value, ora: $('#ap-ora').value, indirizzo: $('#ap-ind').value, agent_id: $('#ap-agente').value ? parseInt($('#ap-agente').value) : null, stato: $('#ap-stato').value, note: $('#ap-note').value,
       civico: $('#ap-civ').value, citta: $('#ap-citta').value, igienizzazione: [...document.querySelectorAll('.ap-ig:checked')].map(x => x.value),
       lavoro_mm: $('#ap-lav').value, ck: $('#ap-ck').value, flag_we: $('#ap-we').checked, flag_pers: $('#ap-pers').checked, preso_il: $('#ap-preso').value };
     if (!body.data) return toast('Data obbligatoria', true);
     try {
-      if (a) await api('/admin/appointments/' + a.id, { method: 'PUT', body });
-      else await api('/admin/appointments', { method: 'POST', body });
+      if (a && a.id) await api('/admin/appointments/' + a.id, { method: 'PUT', body });
+      else await api('/admin/appointments', { method: 'POST', body: { ...body, contact_id: a?.contact_id || null } });
       closeModal(); toast('Appuntamento salvato'); onSave && onSave();
     } catch (e) { toast(e.message, true); }
   };
