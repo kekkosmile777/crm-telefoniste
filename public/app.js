@@ -794,15 +794,19 @@ async function viewAppuntamenti() {
       }).join('')}
     </div>
     <div class="card" style="margin-top:16px">
-      <b>Prossimi appuntamenti</b>
+      <div style="display:flex;align-items:center;gap:10px">
+        <b>Prossimi appuntamenti</b>
+        <span class="spacer" style="flex:1"></span>
+        <button class="btn" id="app-print-sel">🖨 Stampa selezionati</button>
+      </div>
       <div class="table-wrap" style="margin-top:10px"><table>
-        <tr><th>Data</th><th>Ora</th><th>Contatto</th><th>Telefono</th><th>Agente</th><th>Indirizzo</th><th>Presa da</th><th>Stato</th><th></th></tr>
-        ${apps.filter(a => a.data >= todayIso).map(a => appRow(a)).join('') || '<tr><td colspan="9" class="muted">Nessun appuntamento</td></tr>'}
+        <tr><th><input type="checkbox" id="app-sel-all" title="Seleziona tutti"></th><th>Data</th><th>Ora</th><th>Contatto</th><th>Telefono</th><th>Consulente</th><th>Indirizzo</th><th>Presa da</th><th>Stato</th><th></th></tr>
+        ${apps.filter(a => a.data >= todayIso).map(a => appRow(a)).join('') || '<tr><td colspan="10" class="muted">Nessun appuntamento</td></tr>'}
       </table></div>
     </div>`;
 
   function appRow(a) {
-    return `<tr><td>${fmtD(a.data)}</td><td>${a.ora || '—'}</td>
+    return `<tr><td><input type="checkbox" class="app-sel" value="${a.id}"></td><td>${fmtD(a.data)}</td><td>${a.ora || '—'}</td>
       <td>${esc((a.contatto_nome || '') + ' ' + (a.contatto_cognome || '')) || '—'}</td><td>${esc(a.telefono || '')}</td>
       <td>${esc(a.agente || '—')}</td><td>${esc(a.indirizzo || '')}</td><td>${esc(a.operatore || '—')}</td>
       <td><span class="tag ${a.stato === 'confermato' ? 'green' : a.stato === 'annullato' ? 'red' : ''}">${a.stato}</span></td>
@@ -815,6 +819,12 @@ async function viewAppuntamenti() {
   $('#app-new').onclick = () => appointmentForm(null, agents, () => viewAppuntamenti());
   $('#view').querySelectorAll('[data-edit-app]').forEach(b => b.onclick = () => appointmentForm(apps.find(a => a.id == b.dataset.editApp), agents, () => viewAppuntamenti()));
   $('#view').querySelectorAll('[data-print-app]').forEach(b => b.onclick = () => stampaAppuntamento(apps.find(a => a.id == b.dataset.printApp)));
+  const selAll = $('#app-sel-all');
+  if (selAll) selAll.onchange = () => document.querySelectorAll('.app-sel').forEach(c => c.checked = selAll.checked);
+  $('#app-print-sel').onclick = () => {
+    const ids = [...document.querySelectorAll('.app-sel:checked')].map(c => parseInt(c.value));
+    stampaAppuntamenti(apps.filter(a => ids.includes(a.id)));
+  };
   $('#view').querySelectorAll('[data-del-app]').forEach(b => b.onclick = async () => {
     if (!confirm('Eliminare appuntamento?')) return;
     await api('/admin/appointments/' + b.dataset.delApp, { method: 'DELETE' }); toast('Eliminato'); viewAppuntamenti();
@@ -835,34 +845,47 @@ function giornoIt(d) {
   return isNaN(dt) ? '' : g[dt.getDay()];
 }
 
-/* Stampa del modulo appuntamento (replica del modulo cartaceo) */
-function stampaAppuntamento(a) {
+/* Bigliettino appuntamento (replica compatta del modulo cartaceo) */
+function bigliettoHtml(a) {
   let ig = []; try { ig = a.igienizzazione ? JSON.parse(a.igienizzazione) : []; } catch {}
   const v = x => x == null ? '' : String(x).replace(/&/g, '&amp;').replace(/</g, '&lt;');
-  const cb = on => `<span style="display:inline-block;width:15px;height:15px;border:2px solid #000;text-align:center;line-height:13px;font-size:12px;font-weight:bold;vertical-align:middle;margin-left:4px">${on ? 'X' : '&nbsp;'}</span>`;
-  const riga = html => `<div style="border-bottom:2px solid #000;padding:8px 8px;display:flex;gap:20px;align-items:baseline;min-height:20px">${html}</div>`;
+  const cb = on => `<span style="display:inline-block;width:8px;height:8px;border:1.2px solid #000;text-align:center;line-height:7px;font-size:7px;font-weight:bold;vertical-align:middle;margin-left:2px">${on ? 'X' : '&nbsp;'}</span>`;
+  const riga = html => `<div style="border-bottom:1px solid #000;padding:2px 4px;display:flex;gap:8px;align-items:baseline;min-height:11px;overflow:hidden">${html}</div>`;
   const L = t => `<b style="white-space:nowrap">${t}</b>`;
   const noteLines = String(a.note || '').split('\n');
-  const w = window.open('', '_blank', 'width=880,height=720');
-  if (!w) return toast('Sblocca i popup per stampare', true);
-  w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Appuntamento ${v(a.contatto_cognome || '')}</title></head>
-  <body style="font-family:Arial,Helvetica,sans-serif;font-size:14.5px;margin:26px">
-  <div style="border:3px solid #000">
-    ${riga(`${L('DATA')} <span style="flex:1.2">${v(fmtD(a.data))}</span> ${L('GIORNO')} <span style="flex:1.2">${v(giornoIt(a.data))}</span> ${L('ORA')} <span style="flex:1">${v(a.ora)}</span>`)}
+  return `<div style="border:2px solid #000;width:100%;height:100%;box-sizing:border-box;font-size:7.6pt;line-height:1.25;display:flex;flex-direction:column">
+    ${riga(`${L('DATA')} <span style="flex:1.1">${v(fmtD(a.data))}</span> ${L('GIORNO')} <span style="flex:1">${v(giornoIt(a.data))}</span> ${L('ORA')} <span style="flex:.7">${v(a.ora)}</span>`)}
     ${riga(`${L('NOME')} <span style="flex:1">${v(a.contatto_nome)}</span> ${L('COGNOME')} <span style="flex:1">${v(a.contatto_cognome)}</span>`)}
-    ${riga(`${L('INDIRIZZO')} <span style="flex:1">${v(a.indirizzo)}</span> ${L('N°')} <span style="width:90px">${v(a.civico)}</span>`)}
+    ${riga(`${L('INDIRIZZO')} <span style="flex:1">${v(a.indirizzo)}</span> ${L('N°')} <span style="width:34px">${v(a.civico)}</span>`)}
     ${riga(`${L('CITTÀ')} <span style="flex:1">${v(a.citta)}</span> ${L('TELEFONISTA')} <span style="flex:1">${v(a.operatore || (typeof USER !== 'undefined' && USER ? USER.nome : ''))}</span>`)}
-    ${riga(`${L('IGIENIZZAZIONE')} <span style="flex:1"></span> ${L('DIVANO')}${cb(ig.includes('divano'))} <span style="flex:.4"></span> ${L('TAPPETO')}${cb(ig.includes('tappeto'))} <span style="flex:.4"></span> ${L('MATERASSO')}${cb(ig.includes('materasso'))} <span style="flex:.4"></span> ${L('COMPLETA')}${cb(ig.includes('completa'))}`)}
+    ${riga(`${L('IGIENIZZ.')} <span style="flex:.2"></span> ${L('DIVANO')}${cb(ig.includes('divano'))} ${L('TAPPETO')}${cb(ig.includes('tappeto'))} ${L('MATERASSO')}${cb(ig.includes('materasso'))} ${L('COMPLETA')}${cb(ig.includes('completa'))}`)}
     ${riga(`${L('OFFERTA DA')} <span style="flex:1">${v(a.offerto_da)}</span> ${L('PARENTELA')} <span style="flex:1">${v(a.parentela)}</span>`)}
-    ${riga(`${L('INDICAZIONI (da inserire)')} <span style="flex:1">${v(noteLines[0] || '')}</span>`)}
-    ${[1, 2, 3, 4, 5].map(i => riga(`<span style="flex:1">${v(noteLines[i] || '')}</span>`)).join('')}
-    ${riga(`${L('LAVORO M/M')} <span style="flex:1">${v(a.lavoro_mm)}</span> ${L('W.E')}${cb(a.flag_we)} <span style="flex:.3"></span> ${L('PERS')}${cb(a.flag_pers)} <span style="flex:.3"></span> ${L('CK')} <span style="width:110px">${v(a.ck)}</span>`)}
+    ${riga(`${L('INDICAZIONI')} <span style="flex:1">${v(noteLines[0] || '')}</span>`)}
+    <div style="border-bottom:1px solid #000;padding:2px 4px;flex:1;min-height:26px;white-space:pre-wrap;overflow:hidden">${v(noteLines.slice(1).join('\n'))}</div>
+    ${riga(`${L('LAVORO M/M')} <span style="flex:1">${v(a.lavoro_mm)}</span> ${L('W.E')}${cb(a.flag_we)} ${L('PERS')}${cb(a.flag_pers)} ${L('CK')} <span style="width:44px">${v(a.ck)}</span>`)}
     ${riga(`${L('CONSULENTE')} <span style="flex:1">${v(a.agente)}</span>`)}
-    <div style="padding:8px 8px;display:flex;gap:20px;align-items:baseline">${L('APP PRESO IL:')} <span style="flex:1">${v(fmtD(a.preso_il || (a.created_at || '').slice(0, 10)))}</span> ${L('TEL:')} <span style="flex:1">${v(a.telefono)}</span></div>
-  </div>
-  <script>window.onload = () => setTimeout(() => window.print(), 200)<\/script></body></html>`);
+    <div style="padding:2px 4px;display:flex;gap:8px;align-items:baseline">${L('APP PRESO IL:')} <span style="flex:1">${v(fmtD(a.preso_il || (a.created_at || '').slice(0, 10)))}</span> ${L('TEL:')} <span style="flex:1">${v(a.telefono)}</span></div>
+  </div>`;
+}
+
+/* Stampa: 6 bigliettini per foglio A4 (2 colonne x 3 righe), riempiti dall'alto a sinistra */
+function stampaAppuntamenti(list) {
+  if (!list || !list.length) return toast('Seleziona almeno un appuntamento', true);
+  const pagine = [];
+  for (let i = 0; i < list.length; i += 6) pagine.push(list.slice(i, i + 6));
+  const html = pagine.map((gruppo, pi) => `
+    <div style="width:194mm;height:277mm;display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr 1fr;gap:4mm;${pi < pagine.length - 1 ? 'page-break-after:always;' : ''}">
+      ${[0, 1, 2, 3, 4, 5].map(s => `<div style="overflow:hidden">${gruppo[s] ? bigliettoHtml(gruppo[s]) : ''}</div>`).join('')}
+    </div>`).join('');
+  const w = window.open('', '_blank', 'width=900,height=760');
+  if (!w) return toast('Sblocca i popup per stampare', true);
+  w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Appuntamenti (${list.length})</title>
+  <style>@page { size: A4 portrait; margin: 8mm; } body { margin: 0; font-family: Arial, Helvetica, sans-serif; }</style></head>
+  <body>${html}<script>window.onload = () => setTimeout(() => window.print(), 250)<\/script></body></html>`);
   w.document.close();
 }
+
+function stampaAppuntamento(a) { stampaAppuntamenti([a]); }
 
 function appointmentForm(a, agents, onSave) {
   let igCur = []; try { igCur = a?.igienizzazione ? JSON.parse(a.igienizzazione) : []; } catch {}
@@ -1830,14 +1853,24 @@ async function viewAppuntamentiOp() {
   $('#view').innerHTML = `
     <h2 class="page-title">I miei <em>Appuntamenti</em></h2>
     <div class="table-wrap"><table>
-      <tr><th>Data</th><th>Ora</th><th>Contatto</th><th>Telefono</th><th>Consulente</th><th>Indirizzo</th><th>Stato</th><th></th></tr>
-      ${rows.map(a => `<tr><td>${fmtD(a.data)}</td><td>${a.ora || '—'}</td>
+      <tr><th><input type="checkbox" id="op-sel-all" title="Seleziona tutti"></th><th>Data</th><th>Ora</th><th>Contatto</th><th>Telefono</th><th>Consulente</th><th>Indirizzo</th><th>Stato</th><th></th></tr>
+      ${rows.map(a => `<tr><td><input type="checkbox" class="op-app-sel" value="${a.id}"></td><td>${fmtD(a.data)}</td><td>${a.ora || '—'}</td>
         <td>${esc((a.contatto_nome || '') + ' ' + (a.contatto_cognome || ''))}</td><td>${esc(a.telefono || '')}</td>
         <td>${esc(a.agente || '—')}</td><td>${esc(a.indirizzo || '')}</td>
         <td><span class="tag ${a.stato === 'confermato' ? 'green' : a.stato === 'annullato' ? 'red' : ''}">${a.stato}</span></td>
-        <td><button class="btn" data-print-op="${a.id}" title="Stampa modulo">🖨</button></td></tr>`).join('') || '<tr><td colspan="8" class="muted">Nessun appuntamento</td></tr>'}
+        <td><button class="btn" data-print-op="${a.id}" title="Stampa modulo">🖨</button></td></tr>`).join('') || '<tr><td colspan="9" class="muted">Nessun appuntamento</td></tr>'}
     </table></div>`;
   $('#view').querySelectorAll('[data-print-op]').forEach(b => b.onclick = () => stampaAppuntamento(rows.find(a => a.id == b.dataset.printOp)));
+  const opAll = $('#op-sel-all');
+  if (opAll) opAll.onchange = () => document.querySelectorAll('.op-app-sel').forEach(c => c.checked = opAll.checked);
+  const tb = document.createElement('div');
+  tb.className = 'toolbar'; tb.style.marginTop = '10px';
+  tb.innerHTML = '<button class="btn" id="op-print-sel">🖨 Stampa selezionati (6 per foglio A4)</button>';
+  $('#view').appendChild(tb);
+  $('#op-print-sel').onclick = () => {
+    const ids = [...document.querySelectorAll('.op-app-sel:checked')].map(c => parseInt(c.value));
+    stampaAppuntamenti(rows.filter(a => ids.includes(a.id)));
+  };
 }
 
 
