@@ -18,6 +18,14 @@ function contactPayload(row, user) {
   if (has('note')) c.note = row.note;
   if (has('esito_prec')) c.esito = row.esito;
   if (has('caricato_il')) c.caricato_il = row.created_at;
+  if (row.extra) {
+    let ex = null; try { ex = JSON.parse(row.extra); } catch {}
+    if (ex) {
+      const fx = {};
+      for (const [k, v] of Object.entries(ex)) if (v != null && String(v).trim() && has('x:' + k)) fx[k] = v;
+      if (Object.keys(fx).length) c.extra = fx;
+    }
+  }
   if (has('storico')) c.storico = db.prepare(`
     SELECT c.started_at, c.esito, c.note, u.nome AS operatore
     FROM calls c LEFT JOIN users u ON u.id = c.user_id
@@ -58,7 +66,7 @@ router.post('/next', (req, res) => {
 
   // 1. Richiamo scaduto (assegnato a me o libero)
   const cb = db.prepare(`
-    SELECT cb.*, ct.nome, ct.cognome, ct.telefono, ct.comune, ct.provincia, ct.cap, ct.offerto_da, ct.parentela, ct.created_at AS ct_created, ct.note AS contatto_note, ct.esito AS contatto_esito
+    SELECT cb.*, ct.nome, ct.cognome, ct.telefono, ct.comune, ct.provincia, ct.cap, ct.offerto_da, ct.parentela, ct.created_at AS ct_created, ct.extra AS ct_extra, ct.note AS contatto_note, ct.esito AS contatto_esito
     FROM callbacks cb JOIN contacts ct ON ct.id = cb.contact_id
     WHERE cb.stato='pendente' AND cb.richiamo_at <= datetime('now','localtime')
       AND (cb.tipo = 'pubblico' OR cb.user_id = ?)
@@ -67,7 +75,7 @@ router.post('/next', (req, res) => {
     db.prepare('UPDATE callbacks SET user_id=? WHERE id=?').run(uid, cb.id);
     return res.json({
       tipo: 'richiamo', callback_id: cb.id, campaign_id: cb.campaign_id,
-      contact: contactPayload({ id: cb.contact_id, nome: cb.nome, cognome: cb.cognome, telefono: cb.telefono, comune: cb.comune, provincia: cb.provincia, cap: cb.cap, offerto_da: cb.offerto_da, parentela: cb.parentela, note: cb.contatto_note, esito: cb.contatto_esito, created_at: cb.ct_created }, req.user),
+      contact: contactPayload({ id: cb.contact_id, nome: cb.nome, cognome: cb.cognome, telefono: cb.telefono, comune: cb.comune, provincia: cb.provincia, cap: cb.cap, offerto_da: cb.offerto_da, parentela: cb.parentela, note: cb.contatto_note, esito: cb.contatto_esito, created_at: cb.ct_created, extra: cb.ct_extra }, req.user),
       richiamo_at: cb.richiamo_at, richiamo_note: cb.note, richiamo_tipo: cb.tipo
     });
   }

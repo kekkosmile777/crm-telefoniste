@@ -558,6 +558,7 @@ async function contactDetail(id) {
     <p><b>📞 ${esc(c.telefono)}</b> · ${esc(c.comune || '—')} · ${tag(c.esito)}</p>
     <p class="muted">Offerto da: ${esc(c.offerto_da || '—')} · Parentela: ${esc(c.parentela || '—')}</p>
     ${c.note ? `<p style="margin-top:8px">📝 ${esc(c.note)}</p>` : ''}
+    ${c.extra && Object.keys(c.extra).length ? `<h4 style="margin:14px 0 6px">Altre informazioni</h4><div style="max-height:180px;overflow-y:auto">${Object.entries(c.extra).map(([k, v]) => `<div style="padding:2px 0"><span class="muted">${esc(k)}:</span> <b>${esc(String(v))}</b></div>`).join('')}</div>` : ''}
     <h4 style="margin:14px 0 6px">Storico chiamate</h4>
     <div class="table-wrap" style="max-height:200px"><table>
       ${c.storico_chiamate.map(k => `<tr><td>${fmtDT(k.started_at)}</td><td>${esc(k.operatore)}</td><td>${fmtDur(k.durata)}</td><td>${tag(k.esito)}</td><td>${esc(k.note || '')}</td></tr>`).join('') || '<tr><td class="muted">Nessuna chiamata</td></tr>'}
@@ -633,13 +634,24 @@ function importCsv(onDone) {
         for (const i of colIdx[field]) { const v = (r[i] || '').trim(); if (v) return v; }
         return '';
       };
+      const mapped = new Set();
+      Object.values(colIdx).forEach(list => list.forEach(i => mapped.add(i)));
+      const labels = table[0].map(h => { const l = (h || '').trim(); return (!l || l === '---') ? null : l; });
+      const seen = {};
+      labels.forEach((l, i) => { if (!l) return; seen[l] = (seen[l] || 0) + 1; if (seen[l] > 1) labels[i] = l + ' (' + seen[l] + ')'; });
       rows = [];
       let scartate = 0;
       for (const r of table.slice(1)) {
         const nome = pick(r, 'nome'), cognome = pick(r, 'cognome');
         let tel = pick(r, 'telefono').replace(/[^+0-9]/g, '');
         if (!tel || (!nome && !cognome)) { scartate++; continue; }
-        rows.push({ nome: nome || cognome, cognome: nome ? cognome : '', telefono: tel, comune: pick(r, 'comune'), offerto_da: pick(r, 'offerto_da'), parentela: pick(r, 'parentela'), provincia: pick(r, 'provincia'), cap: pick(r, 'cap') });
+        const extra = {};
+        labels.forEach((l, i) => {
+          if (!l || mapped.has(i)) return;
+          const v = (r[i] || '').trim();
+          if (v) extra[l.slice(0, 60)] = v.slice(0, 500);
+        });
+        rows.push({ nome: nome || cognome, cognome: nome ? cognome : '', telefono: tel, comune: pick(r, 'comune'), offerto_da: pick(r, 'offerto_da'), parentela: pick(r, 'parentela'), provincia: pick(r, 'provincia'), cap: pick(r, 'cap'), extra });
       }
       $('#csv-preview').innerHTML = `<p><b>${rows.length}</b> contatti pronti${scartate ? ` (<b>${scartate}</b> righe scartate: senza telefono o nome)` : ''}. Anteprima:</p>
         <div class="table-wrap" style="max-height:180px"><table>
@@ -653,7 +665,7 @@ function importCsv(onDone) {
   $('#csv-go').onclick = async () => {
     $('#csv-go').disabled = true;
     const r = await api('/contacts/import', { method: 'POST', body: { rows } });
-    closeModal(); toast(`Importati ${r.inseriti} contatti: ${r.geolocalizzati ?? 0} geolocalizzati, ${r.non_geolocalizzati ?? 0} non geolocalizzati (${r.saltati} già presenti o scartati)`); onDone && onDone();
+    closeModal(); toast(`Importati ${r.inseriti} nuovi contatti (${r.geolocalizzati ?? 0} geolocalizzati), ${r.aggiornati ?? 0} arricchiti con nuove informazioni, ${r.saltati} scartati`); onDone && onDone();
   };
 }
 
@@ -992,9 +1004,11 @@ function userForm(u) {
     $('#uf-orario-wrap').classList.toggle('hidden', !perso);
     if (perso && !$('#uf-orario-wrap').innerHTML) renderOrarioEditor();
   };
+  let TUTTI_CAMPI_U = [...CAMPI_CONTATTO];
+  api('/admin/settings').then(s2 => { TUTTI_CAMPI_U = tuttiICampi(s2); if ($('#uf-campi-wrap') && !$('#uf-campi-wrap').classList.contains('hidden')) renderCampi(); }).catch(() => {});
   function renderCampi() {
     const cur = u?.campi_visibili || null;
-    $('#uf-campi-wrap').innerHTML = CAMPI_CONTATTO.map(([k, lbl]) => `<label class="perm-item"><input type="checkbox" class="uf-campo" value="${k}" ${!cur || cur.includes(k) ? 'checked' : ''}> ${lbl}</label>`).join('');
+    $('#uf-campi-wrap').innerHTML = TUTTI_CAMPI_U.map(([k, lbl]) => `<label class="perm-item"><input type="checkbox" class="uf-campo" value="${k}" ${!cur || cur.includes(k) ? 'checked' : ''}> ${esc(lbl)}</label>`).join('');
   }
   if (u?.campi_visibili) renderCampi();
   $('#uf-campi-tipo').onchange = () => {
@@ -1168,13 +1182,14 @@ async function viewImpostazioni() {
     </div>`;
   $('#set-save').onclick = async () => { await api('/admin/settings', { method: 'PUT', body: { note: $('#set-note').value } }); toast('Salvato'); };
   (() => {
+    const tutti = tuttiICampi(s);
     let cur = null; try { cur = s.campi_visibili ? JSON.parse(s.campi_visibili) : null; } catch {}
-    $('#cv-grid').innerHTML = CAMPI_CONTATTO.map(([k, lbl]) => `<label class="perm-item"><input type="checkbox" class="cv-box" value="${k}" ${!cur || cur.includes(k) ? 'checked' : ''}> ${lbl}</label>`).join('');
+    $('#cv-grid').innerHTML = tutti.map(([k, lbl]) => `<label class="perm-item"><input type="checkbox" class="cv-box" value="${k}" ${!cur || cur.includes(k) ? 'checked' : ''}> ${esc(lbl)}</label>`).join('');
     $('#cv-all').onclick = () => document.querySelectorAll('.cv-box').forEach(c => c.checked = true);
     $('#cv-none').onclick = () => document.querySelectorAll('.cv-box').forEach(c => c.checked = false);
     $('#cv-save').onclick = async () => {
       const sel = [...document.querySelectorAll('.cv-box:checked')].map(c => c.value);
-      await api('/admin/settings', { method: 'PUT', body: { campi_visibili: sel.length === CAMPI_CONTATTO.length ? '' : JSON.stringify(sel) } });
+      await api('/admin/settings', { method: 'PUT', body: { campi_visibili: sel.length === tutti.length ? '' : JSON.stringify(sel) } });
       toast('Visibilità informazioni salvata');
     };
   })();
@@ -1444,6 +1459,12 @@ const CAMPI_CONTATTO = [
   ['storico', '🕘 Storico chiamate con esiti'], ['caricato_il', '📅 Data di caricamento']
 ];
 
+function tuttiICampi(settings) {
+  let extraKeys = [];
+  try { if (settings && settings.extra_keys) extraKeys = JSON.parse(settings.extra_keys) || []; } catch {}
+  return [...CAMPI_CONTATTO, ...extraKeys.map(k => ['x:' + k, '📎 ' + k])];
+}
+
 function infoRiga(lbl, val) {
   return val ? `<div style="display:flex;gap:8px;padding:2px 0"><span class="muted" style="min-width:110px;flex-shrink:0">${lbl}</span><b style="text-align:left">${esc(val)}</b></div>` : '';
 }
@@ -1465,6 +1486,7 @@ function renderContact() {
       ${infoRiga('🤝 Offerto da', c.offerto_da)}
       ${infoRiga('👥 Parentela', c.parentela)}
       ${infoRiga('📅 Caricato il', c.caricato_il ? fmtDT(c.caricato_il) : '')}
+      ${c.extra ? Object.entries(c.extra).map(([k, v]) => infoRiga('📎 ' + esc(k), String(v))).join('') : ''}
       ${c.note ? `<div style="margin-top:6px;background:#faf9fe;border:1px solid var(--border);border-radius:8px;padding:8px">📝 ${esc(c.note)}</div>` : ''}
       ${(c.storico && c.storico.length) ? `<div style="margin-top:8px"><b style="font-size:12.5px">🕘 Chiamate precedenti</b>${c.storico.map(s => `
         <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding:3px 0;border-bottom:1px dashed var(--border)">

@@ -46,7 +46,8 @@ router.get('/contacts/:id', (req, res) => {
   const calls = db.prepare(`SELECT c.*, u.nome AS operatore FROM calls c JOIN users u ON u.id = c.user_id WHERE c.contact_id = ? ORDER BY c.started_at DESC LIMIT 20`).all(req.params.id);
   const callbacks = db.prepare(`SELECT * FROM callbacks WHERE contact_id = ? AND stato='pendente'`).all(req.params.id);
   const appointments = db.prepare(`SELECT * FROM appointments WHERE contact_id = ? ORDER BY data DESC LIMIT 5`).all(req.params.id);
-  res.json({ ...c, storico_chiamate: calls, richiami: callbacks, appuntamenti: appointments });
+  let extra = null; try { if (c.extra) extra = JSON.parse(c.extra); } catch {}
+  res.json({ ...c, extra, storico_chiamate: calls, richiami: callbacks, appuntamenti: appointments });
 });
 
 router.post('/contacts', (req, res) => {
@@ -88,24 +89,45 @@ router.post('/contacts/bulk-esito', requireAdmin, (req, res) => {
 router.post('/contacts/import', requireAdmin, (req, res) => {
   const { rows } = req.body;
   if (!Array.isArray(rows)) return res.status(400).json({ error: 'rows mancante' });
-  let inseriti = 0, saltati = 0;
-  const exists = db.prepare('SELECT id FROM contacts WHERE telefono = ?');
-  const ins = db.prepare(`INSERT INTO contacts (nome, cognome, telefono, comune, provincia, cap, offerto_da, parentela, lat, lng) VALUES (?,?,?,?,?,?,?,?,?,?)`);
+  let inseriti = 0, saltati = 0, aggiornati = 0;
+  const exists = db.prepare('SELECT * FROM contacts WHERE telefono = ?');
+  const ins = db.prepare(`INSERT INTO contacts (nome, cognome, telefono, comune, provincia, cap, offerto_da, parentela, lat, lng, extra) VALUES (?,?,?,?,?,?,?,?,?,?,?)`);
+  const updOld = db.prepare(`UPDATE contacts SET nome=?, cognome=?, comune=?, provincia=?, cap=?, offerto_da=?, parentela=?, lat=?, lng=?, extra=?, updated_at=datetime('now') WHERE id=?`);
   let geoOk = 0, geoNo = 0;
+  const allKeys = new Set();
+  try { const kk = db.prepare("SELECT value FROM settings WHERE key='extra_keys'").get(); if (kk && kk.value) JSON.parse(kk.value).forEach(k => allKeys.add(k)); } catch {}
   const tx = db.transaction(() => {
     for (const r of rows) {
       if (!r.nome || !r.telefono) { saltati++; continue; }
-      if (exists.get(String(r.telefono).trim())) { saltati++; continue; }
+      const extra = (r.extra && typeof r.extra === 'object' && !Array.isArray(r.extra)) ? r.extra : null;
+      if (extra) Object.keys(extra).forEach(k => allKeys.add(k));
+      const old = exists.get(String(r.telefono).trim());
+      if (old) {
+        // gia' presente: completo i campi vuoti e unisco le informazioni extra (senza toccare esiti e note)
+        let oldExtra = {}; try { if (old.extra) oldExtra = JSON.parse(old.extra) || {}; } catch {}
+        const merged = { ...(extra || {}), ...oldExtra };
+        const comune = old.comune || (r.comune || '').trim();
+        const provincia = old.provincia || String(r.provincia || '').trim().toUpperCase();
+        const cap = old.cap || String(r.cap || '').trim();
+        let lat = old.lat, lng = old.lng;
+        if (lat == null) { const g = geocode({ comune, provincia, cap }); if (g) { lat = g.lat; lng = g.lng; } }
+        updOld.run(old.nome || r.nome.trim(), old.cognome || (r.cognome || '').trim(), comune, provincia, cap,
+          old.offerto_da || (r.offerto_da || '').trim(), old.parentela || (r.parentela || '').trim(), lat, lng,
+          Object.keys(merged).length ? JSON.stringify(merged) : null, old.id);
+        aggiornati++; continue;
+      }
       const g = geocode({ comune: r.comune, provincia: r.provincia, cap: r.cap });
       if (g) geoOk++; else geoNo++;
       ins.run(r.nome.trim(), (r.cognome || '').trim(), String(r.telefono).trim(), (r.comune || '').trim(),
         String(r.provincia || '').trim().toUpperCase(), String(r.cap || '').trim(),
-        (r.offerto_da || '').trim(), (r.parentela || '').trim(), g ? g.lat : null, g ? g.lng : null);
+        (r.offerto_da || '').trim(), (r.parentela || '').trim(), g ? g.lat : null, g ? g.lng : null,
+        extra && Object.keys(extra).length ? JSON.stringify(extra) : null);
       inseriti++;
     }
+    if (allKeys.size) db.prepare("INSERT INTO settings (key, value) VALUES ('extra_keys', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify([...allKeys]));
   });
   tx();
-  res.json({ ok: true, inseriti, saltati, geolocalizzati: geoOk, non_geolocalizzati: geoNo });
+  res.json({ ok: true, inseriti, aggiornati, saltati, geolocalizzati: geoOk, non_geolocalizzati: geoNo });
 });
 
 // Modifica multipla (admin): applica comune/provincia/cap a piu' contatti e ri-geolocalizza
