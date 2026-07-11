@@ -14,12 +14,22 @@ function login(username, password) {
   return { token, user: publicUser(user) };
 }
 
+function campiVisibiliEff(u) {
+  if (u.ruolo === 'admin') return null; // null = tutto visibile
+  try { if (u.campi_visibili) { const own = JSON.parse(u.campi_visibili); if (Array.isArray(own)) return own; } } catch {}
+  try {
+    const row = db.prepare("SELECT value FROM settings WHERE key='campi_visibili'").get();
+    if (row && row.value) { const gen = JSON.parse(row.value); if (Array.isArray(gen)) return gen; }
+  } catch {}
+  return null;
+}
+
 function publicUser(u) {
   let permessi = null;
   try { if (u.permessi) permessi = JSON.parse(u.permessi); } catch {}
   let orario_settimana = null;
   try { if (u.orario_settimana) orario_settimana = JSON.parse(u.orario_settimana); } catch {}
-  return { id: u.id, username: u.username, nome: u.nome, ruolo: u.ruolo, attivo: u.attivo, permessi, orario_dal: u.orario_dal || null, orario_al: u.orario_al || null, orario_settimana };
+  return { id: u.id, username: u.username, nome: u.nome, ruolo: u.ruolo, attivo: u.attivo, permessi, orario_dal: u.orario_dal || null, orario_al: u.orario_al || null, orario_settimana, campi_visibili: campiVisibiliEff(u) };
 }
 
 function requireAuth(req, res, next) {

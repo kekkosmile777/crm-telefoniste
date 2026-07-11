@@ -94,6 +94,7 @@ Anagrafica degli agenti sul territorio (nome, telefono, zone) che vanno agli app
 - **Telefonia:** stato Twilio, 🔴 registrazione chiamate on/off, numero in uscita a scelta tra quelli del subaccount
 - **🕐 Orario generale:** planning settimanale (giorno per giorno, con pausa) valido per tutte le operatrici senza orario personalizzato
 - **🔒 Sicurezza e backup:** 💾 scarica il backup completo del database (consigliato: settimanale)
+- **👁 Informazioni visibili:** scegli quali dati del contatto vedono le operatrici in chiamata (nome, cognome e telefono sempre visibili; gli admin vedono tutto)
 - **📝 Note** interne
 
 ---
@@ -101,6 +102,8 @@ Anagrafica degli agenti sul territorio (nome, telefono, zone) che vanno agli app
 ## 4. Lato OPERATRICE
 
 ### 4.1 Postazione (cuore del lavoro)
+La scheda del contatto in chiamata mostra **tutte le informazioni caricate**: comune (con provincia e CAP), offerto da, parentela (moglie/marito...), note, ultimo esito, data di caricamento e **storico delle chiamate precedenti con esiti**. L'amministratore decide quali di queste informazioni sono visibili alle operatrici (Impostazioni → «Informazioni visibili», o per singola operatrice in Utenti). Se cade la linea, il tasto **📞 Richiama** ritelefona allo stesso contatto senza perderlo.
+
 1. Seleziona la campagna → **▶ Prossima chiamata**
 2. Il sistema propone il contatto: **prima i richiami scaduti**, poi la coda (per le geo: il più vicino nella zona scelta, con distanza in km)
 3. **📞 Chiama** → softphone nel browser. In chiamata: **🔇 Muto**, **🔊 volume**, sensibilità microfono, timer

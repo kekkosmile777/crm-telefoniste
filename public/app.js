@@ -950,6 +950,14 @@ function userForm(u) {
         </select></div>
     </div>
     <div id="uf-orario-wrap" class="${u?.orario_settimana ? '' : 'hidden'}" style="margin-top:10px"></div>
+    <div id="uf-campi-sez">
+      <label style="margin-top:14px">👁 Informazioni contatto visibili in chiamata</label>
+      <select id="uf-campi-tipo" style="width:100%">
+        <option value="generale" ${!u?.campi_visibili ? 'selected' : ''}>Segue l'impostazione generale</option>
+        <option value="personalizzato" ${u?.campi_visibili ? 'selected' : ''}>Personalizzato per questa operatrice</option>
+      </select>
+      <div id="uf-campi-wrap" class="perms-grid ${u?.campi_visibili ? '' : 'hidden'}" style="margin-top:8px"></div>
+    </div>
     <label style="margin-top:14px">Funzioni abilitate</label>
     <div class="toolbar" style="margin-bottom:6px">
       <button class="btn" id="uf-all" type="button">✓ Tutte</button>
@@ -984,6 +992,16 @@ function userForm(u) {
     $('#uf-orario-wrap').classList.toggle('hidden', !perso);
     if (perso && !$('#uf-orario-wrap').innerHTML) renderOrarioEditor();
   };
+  function renderCampi() {
+    const cur = u?.campi_visibili || null;
+    $('#uf-campi-wrap').innerHTML = CAMPI_CONTATTO.map(([k, lbl]) => `<label class="perm-item"><input type="checkbox" class="uf-campo" value="${k}" ${!cur || cur.includes(k) ? 'checked' : ''}> ${lbl}</label>`).join('');
+  }
+  if (u?.campi_visibili) renderCampi();
+  $('#uf-campi-tipo').onchange = () => {
+    const perso = $('#uf-campi-tipo').value === 'personalizzato';
+    $('#uf-campi-wrap').classList.toggle('hidden', !perso);
+    if (perso && !$('#uf-campi-wrap').innerHTML) renderCampi();
+  };
   $('#uf-all').onclick = () => $('#uf-perms').querySelectorAll('.uf-perm:not(:disabled)').forEach(c => c.checked = true);
   $('#uf-none').onclick = () => $('#uf-perms').querySelectorAll('.uf-perm:not(:disabled)').forEach(c => c.checked = false);
   renderPerms();
@@ -995,14 +1013,16 @@ function userForm(u) {
     try {
       if (u) {
         const orario_settimana = $('#uf-orario-tipo').value === 'personalizzato' ? orarioEditorRead('ufo') : null;
-        const body = { nome: $('#uf-nome').value, ruolo: $('#uf-ruolo').value, permessi, orario_settimana, orario_dal: null, orario_al: null };
+        const campi_visibili = $('#uf-campi-tipo').value === 'personalizzato' ? [...document.querySelectorAll('.uf-campo:checked')].map(c => c.value) : null;
+        const body = { nome: $('#uf-nome').value, ruolo: $('#uf-ruolo').value, permessi, orario_settimana, orario_dal: null, orario_al: null, campi_visibili };
         if ($('#uf-pass').value) body.password = $('#uf-pass').value;
         await api('/admin/users/' + u.id, { method: 'PUT', body });
         if (isSelf) { USER.permessi = permessi; }
       } else {
         const orario_settimana = $('#uf-orario-tipo').value === 'personalizzato' ? orarioEditorRead('ufo') : null;
         const nu = await api('/admin/users', { method: 'POST', body: { nome: $('#uf-nome').value, username: $('#uf-user').value, password: $('#uf-pass').value, ruolo: $('#uf-ruolo').value, permessi } });
-        if (orario_settimana) await api('/admin/users/' + nu.id, { method: 'PUT', body: { orario_settimana } });
+        const campi_visibili = $('#uf-campi-tipo').value === 'personalizzato' ? [...document.querySelectorAll('.uf-campo:checked')].map(c => c.value) : null;
+        if (orario_settimana || campi_visibili) await api('/admin/users/' + nu.id, { method: 'PUT', body: { orario_settimana: orario_settimana || undefined, campi_visibili } });
       }
       closeModal(); toast('Utente salvato'); viewOperatrici();
     } catch (e) { toast(e.message, true); }
@@ -1127,6 +1147,16 @@ async function viewImpostazioni() {
       </div>
     </div>
     <div class="card">
+      <b>👁 Informazioni del contatto visibili alle operatrici</b>
+      <p class="muted" style="margin-top:6px">In chiamata l'operatrice vede sempre nome, cognome e telefono. Qui scegli quali altre informazioni mostrare (vale per tutte; in Utenti puoi personalizzare la singola operatrice). Gli amministratori vedono sempre tutto.</p>
+      <div class="toolbar" style="margin:8px 0 6px">
+        <button class="btn" id="cv-all" type="button">✓ Tutte</button>
+        <button class="btn" id="cv-none" type="button">✗ Nessuna</button>
+      </div>
+      <div id="cv-grid" class="perms-grid"></div>
+      <div style="margin-top:10px"><button class="btn primary" id="cv-save">💾 Salva visibilità</button></div>
+    </div>
+    <div class="card">
       <b>📝 Note e promemoria</b>
       <textarea id="set-note" style="margin-top:10px; min-height:120px">${esc(s.note || '')}</textarea>
       <div style="margin-top:10px"><button class="btn primary" id="set-save">💾 Salva</button></div>
@@ -1137,6 +1167,17 @@ async function viewImpostazioni() {
       <button class="btn primary" id="set-backup" style="margin-top:8px">💾 Scarica backup database</button>
     </div>`;
   $('#set-save').onclick = async () => { await api('/admin/settings', { method: 'PUT', body: { note: $('#set-note').value } }); toast('Salvato'); };
+  (() => {
+    let cur = null; try { cur = s.campi_visibili ? JSON.parse(s.campi_visibili) : null; } catch {}
+    $('#cv-grid').innerHTML = CAMPI_CONTATTO.map(([k, lbl]) => `<label class="perm-item"><input type="checkbox" class="cv-box" value="${k}" ${!cur || cur.includes(k) ? 'checked' : ''}> ${lbl}</label>`).join('');
+    $('#cv-all').onclick = () => document.querySelectorAll('.cv-box').forEach(c => c.checked = true);
+    $('#cv-none').onclick = () => document.querySelectorAll('.cv-box').forEach(c => c.checked = false);
+    $('#cv-save').onclick = async () => {
+      const sel = [...document.querySelectorAll('.cv-box:checked')].map(c => c.value);
+      await api('/admin/settings', { method: 'PUT', body: { campi_visibili: sel.length === CAMPI_CONTATTO.length ? '' : JSON.stringify(sel) } });
+      toast('Visibilità informazioni salvata');
+    };
+  })();
   $('#set-backup').onclick = async () => {
     const res = await fetch('/api/admin/backup.db', { headers: { Authorization: 'Bearer ' + TOKEN } });
     if (!res.ok) return toast('Backup fallito', true);
@@ -1396,21 +1437,42 @@ function renderCopione() {
   box.classList.remove('hidden');
 }
 
+const CAMPI_CONTATTO = [
+  ['comune', '📍 Comune'], ['provincia', 'Provincia'], ['cap', 'CAP'],
+  ['offerto_da', '🤝 Offerto da'], ['parentela', '👥 Parentela (moglie, marito...)'],
+  ['note', '📝 Note del contatto'], ['esito_prec', '🏷 Ultimo esito'],
+  ['storico', '🕘 Storico chiamate con esiti'], ['caricato_il', '📅 Data di caricamento']
+];
+
+function infoRiga(lbl, val) {
+  return val ? `<div style="display:flex;gap:8px;padding:2px 0"><span class="muted" style="min-width:110px;flex-shrink:0">${lbl}</span><b style="text-align:left">${esc(val)}</b></div>` : '';
+}
+
 function renderContact() {
   const c = WS.current.contact;
   const isRichiamo = WS.current.tipo === 'richiamo';
   $('#ws-contact').innerHTML = `
     ${isRichiamo ? `<div class="tag orange" style="margin-bottom:8px">🔄 RICHIAMO ${WS.current.richiamo_tipo === 'pubblico' ? '👥' : '🔒'} ${fmtDT(WS.current.richiamo_at)} ${esc(WS.current.richiamo_note || '')}</div>` : ''}
     <div class="cname">${esc(nomeCompleto(c))}</div>
+    <div class="cphone">${esc(c.telefono)}</div>
     <div class="contact-meta">
-      ${c.comune ? `<span class="tag">📍 ${esc(c.comune)}</span>` : ''}
-      ${c.offerto_da ? `<span class="tag gray">🤝 ${esc(c.offerto_da)}</span>` : ''}
-      ${c.parentela ? `<span class="tag gray">👥 ${esc(c.parentela)}</span>` : ''}
       ${WS.current.tentativi ? `<span class="tag gray">tent. ${WS.current.tentativi}</span>` : ''}
       ${WS.current.dist_km != null ? `<span class="tag green">\uD83D\uDCCD ${WS.current.dist_km} km</span>` : ''}
+      ${c.esito && c.esito !== 'da_chiamare' ? tag(c.esito) : ''}
     </div>
-    <div class="cphone">${esc(c.telefono)}</div>
-    ${c.note ? `<p class="muted">📝 ${esc(c.note)}</p>` : ''}
+    <div style="text-align:left; max-width:430px; margin:10px auto 0; font-size:13.5px; border-top:1px solid var(--border); padding-top:10px">
+      ${infoRiga('📍 Comune', [c.comune, c.provincia ? '(' + c.provincia + ')' : '', c.cap].filter(Boolean).join(' '))}
+      ${infoRiga('🤝 Offerto da', c.offerto_da)}
+      ${infoRiga('👥 Parentela', c.parentela)}
+      ${infoRiga('📅 Caricato il', c.caricato_il ? fmtDT(c.caricato_il) : '')}
+      ${c.note ? `<div style="margin-top:6px;background:#faf9fe;border:1px solid var(--border);border-radius:8px;padding:8px">📝 ${esc(c.note)}</div>` : ''}
+      ${(c.storico && c.storico.length) ? `<div style="margin-top:8px"><b style="font-size:12.5px">🕘 Chiamate precedenti</b>${c.storico.map(s => `
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding:3px 0;border-bottom:1px dashed var(--border)">
+          <span class="muted" style="font-size:12px;white-space:nowrap">${fmtDT(s.started_at)}</span>${tag(s.esito)}
+          <span class="muted" style="font-size:12px">${esc(s.operatore || '')}</span>
+          ${s.note ? `<span style="font-size:12px">${esc(s.note)}</span>` : ''}
+        </div>`).join('')}</div>` : ''}
+    </div>
     <div class="call-status" id="ws-status"></div>
     <div class="call-timer hidden" id="ws-timer">00:00</div>
     <div class="call-buttons" id="ws-buttons"></div>`;

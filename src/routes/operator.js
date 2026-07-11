@@ -5,6 +5,27 @@ const presence = require('../presence');
 const { ESITI } = require('./shared');
 const router = express.Router();
 
+/* Costruisce la scheda contatto rispettando i campi visibili dell'utente (null = tutto) */
+function contactPayload(row, user) {
+  const vis = user.campi_visibili;
+  const has = k => !vis || vis.includes(k);
+  const c = { id: row.id, nome: row.nome, cognome: row.cognome, telefono: row.telefono };
+  if (has('comune')) c.comune = row.comune;
+  if (has('provincia')) c.provincia = row.provincia;
+  if (has('cap')) c.cap = row.cap;
+  if (has('offerto_da')) c.offerto_da = row.offerto_da;
+  if (has('parentela')) c.parentela = row.parentela;
+  if (has('note')) c.note = row.note;
+  if (has('esito_prec')) c.esito = row.esito;
+  if (has('caricato_il')) c.caricato_il = row.created_at;
+  if (has('storico')) c.storico = db.prepare(`
+    SELECT c.started_at, c.esito, c.note, u.nome AS operatore
+    FROM calls c LEFT JOIN users u ON u.id = c.user_id
+    WHERE c.contact_id = ? AND c.esito IS NOT NULL
+    ORDER BY c.id DESC LIMIT 5`).all(row.id);
+  return c;
+}
+
 const LOCK_TIMEOUT_MIN = 15; // sblocca contatti rimasti "in_chiamata" da troppo tempo
 
 function releaseStaleLocks() {
@@ -37,7 +58,7 @@ router.post('/next', (req, res) => {
 
   // 1. Richiamo scaduto (assegnato a me o libero)
   const cb = db.prepare(`
-    SELECT cb.*, ct.nome, ct.cognome, ct.telefono, ct.comune, ct.offerto_da, ct.parentela, ct.note AS contatto_note, ct.esito AS contatto_esito
+    SELECT cb.*, ct.nome, ct.cognome, ct.telefono, ct.comune, ct.provincia, ct.cap, ct.offerto_da, ct.parentela, ct.created_at AS ct_created, ct.note AS contatto_note, ct.esito AS contatto_esito
     FROM callbacks cb JOIN contacts ct ON ct.id = cb.contact_id
     WHERE cb.stato='pendente' AND cb.richiamo_at <= datetime('now','localtime')
       AND (cb.tipo = 'pubblico' OR cb.user_id = ?)
@@ -46,7 +67,7 @@ router.post('/next', (req, res) => {
     db.prepare('UPDATE callbacks SET user_id=? WHERE id=?').run(uid, cb.id);
     return res.json({
       tipo: 'richiamo', callback_id: cb.id, campaign_id: cb.campaign_id,
-      contact: { id: cb.contact_id, nome: cb.nome, cognome: cb.cognome, telefono: cb.telefono, comune: cb.comune, offerto_da: cb.offerto_da, parentela: cb.parentela, note: cb.contatto_note, esito: cb.contatto_esito },
+      contact: contactPayload({ id: cb.contact_id, nome: cb.nome, cognome: cb.cognome, telefono: cb.telefono, comune: cb.comune, provincia: cb.provincia, cap: cb.cap, offerto_da: cb.offerto_da, parentela: cb.parentela, note: cb.contatto_note, esito: cb.contatto_esito, created_at: cb.ct_created }, req.user),
       richiamo_at: cb.richiamo_at, richiamo_note: cb.note, richiamo_tipo: cb.tipo
     });
   }
@@ -95,7 +116,7 @@ router.post('/next', (req, res) => {
   res.json({
     tipo: 'campagna', cc_id: row.cc_id, campaign_id: parseInt(campaignId), tentativi: row.tentativi,
     dist_km: row.dist != null ? Math.round(row.dist * 10) / 10 : null,
-    contact: { id: row.id, nome: row.nome, cognome: row.cognome, telefono: row.telefono, comune: row.comune, offerto_da: row.offerto_da, parentela: row.parentela, note: row.note, esito: row.esito }
+    contact: contactPayload(row, req.user)
   });
 });
 
