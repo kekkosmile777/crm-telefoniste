@@ -1487,24 +1487,45 @@ async function startCall() {
     WS.callId = r.call_id;
     WS.callStart = Date.now();
     WS.presence = 'in_chiamata';
-    WS.timer = setInterval(() => {
-      const s = Math.floor((Date.now() - WS.callStart) / 1000);
-      const t = $('#ws-timer');
-      if (t) t.textContent = `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
-    }, 1000);
-
-    if (WS.twilioReady) {
-      WS.connection = await WS.device.connect({ params: { To: c.telefono } });
-      WS.connection.on('accept', () => {
-        setSpeakerVolume(WS.volume ?? 100); updateCallUI();
-        const sid = WS.connection.parameters?.CallSid;
-        if (sid && WS.callId) api(`/op/calls/${WS.callId}/sid`, { method: 'POST', body: { twilio_sid: sid } }).catch(() => {});
-      });
-      WS.connection.on('disconnect', () => { if (WS.callId) onCallEnded(); });
-      WS.connection.on('error', e => toast('Errore chiamata: ' + e.message, true));
-    }
+    startCallTimer();
+    if (WS.twilioReady) await connectTwilio();
     updateCallUI();
     renderEsitoForm(); // esito compilabile già durante la chiamata
+  } catch (e) { toast(e.message, true); }
+}
+
+function startCallTimer() {
+  clearInterval(WS.timer);
+  WS.timer = setInterval(() => {
+    const s = Math.floor((Date.now() - WS.callStart) / 1000);
+    const t = $('#ws-timer');
+    if (t) t.textContent = `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+  }, 1000);
+}
+
+async function connectTwilio() {
+  const c = WS.current.contact;
+  WS.connection = await WS.device.connect({ params: { To: c.telefono } });
+  WS.connection.on('accept', () => {
+    setSpeakerVolume(WS.volume ?? 100); updateCallUI();
+    const sid = WS.connection.parameters?.CallSid;
+    if (sid && WS.callId) api(`/op/calls/${WS.callId}/sid`, { method: 'POST', body: { twilio_sid: sid } }).catch(() => {});
+  });
+  WS.connection.on('disconnect', () => { if (WS.callId) onCallEnded(); });
+  WS.connection.on('error', e => toast('Errore chiamata: ' + e.message, true));
+}
+
+/* Richiama lo stesso contatto dopo una caduta di linea (stessa scheda chiamata, il tempo si somma) */
+async function redialCall() {
+  if (!WS.current) return;
+  if (!WS.callId) return startCall();
+  try {
+    WS.callStart = Date.now() - (WS.durata || 0) * 1000;
+    WS.presence = 'in_chiamata';
+    startCallTimer();
+    if (WS.twilioReady) await connectTwilio();
+    updateCallUI();
+    toast('Richiamo in corso...');
   } catch (e) { toast(e.message, true); }
 }
 
@@ -1519,9 +1540,13 @@ function onCallEnded() {
   WS.durata = Math.floor((Date.now() - WS.callStart) / 1000);
   WS.connection = null;
   const status = $('#ws-status');
-  if (status) status.innerHTML = '☑️ Chiamata terminata — <b>registra l\'esito</b>';
+  if (status) status.innerHTML = '☑️ Chiamata terminata — <b>registra l\'esito</b> (o Richiama se è caduta la linea)';
   const btns = $('#ws-buttons');
-  if (btns) btns.innerHTML = '';
+  if (btns) {
+    btns.innerHTML = WS.current ? '<button class="btn success big" id="ws-redial">📞 Richiama</button>' : '';
+    const rb = $('#ws-redial');
+    if (rb) rb.onclick = redialCall;
+  }
   toast('Chiamata terminata: seleziona l\'esito');
 }
 
