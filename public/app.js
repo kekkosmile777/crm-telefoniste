@@ -1339,12 +1339,10 @@ async function openGeoMap() {
     const d = await api(`/op/campaigns/${WS.selectedCampaign}/geo-points`);
     openModal('\uD83D\uDCCD Scegli la posizione di partenza', `
       <p class="muted" style="margin-bottom:8px">${d.points.length} contatti da chiamare${d.senza_posizione ? ` (+${d.senza_posizione} senza posizione, esclusi)` : ''}.
-      Ogni cerchio è una zona con il <b>numero di contatti</b>: cliccane uno e la coda proseguirà per vicinanza entro <b>${raggio} km</b>.</p>
+      Ogni cerchio è una zona con il <b>numero di contatti</b>: <b>clicca una bolla e si parte subito</b> — la coda prosegue per vicinanza entro <b>${raggio} km</b>.</p>
       <div id="geo-map" style="height:440px; border-radius:10px"></div>
       <div class="modal-actions">
-        <span id="geo-sel" class="muted" style="margin-right:auto">Nessun punto selezionato</span>
         <button class="btn" onclick="closeModal()">Annulla</button>
-        <button class="btn primary" id="geo-start" disabled>▶ Inizia da qui</button>
       </div>`);
     if (!d.points.length) { $('#geo-map').innerHTML = '<p class="muted" style="padding:20px">Nessun contatto con posizione in questa campagna.</p>'; return; }
     setTimeout(() => {
@@ -1369,22 +1367,18 @@ async function openGeoMap() {
         const m = L.marker([g.lat, g.lng], { icon });
         m.addTo(map).bindTooltip(`${esc(g.comune || 'Zona')} — ${g.n} contatt${g.n === 1 ? 'o' : 'i'}`);
         m.on('click', () => {
+          if (sel) return; // doppio clic accidentale
           sel = g;
           if (circle) circle.remove();
           circle = L.circle([g.lat, g.lng], { radius: raggio * 1000, color: '#22a35c', fillOpacity: .08 }).addTo(map);
-          $('#geo-sel').textContent = `Partenza: ${g.comune || 'zona'} (${g.n} contatti nella zona)`;
-          $('#geo-start').disabled = false;
+          WS.geoCenter = { lat: g.lat, lng: g.lng, label: g.comune || 'zona scelta', campaign: WS.selectedCampaign };
+          closeModal();
+          toast(`Zona impostata: ${WS.geoCenter.label} — raggio ${raggio} km`);
+          const bar = $('#ws-geo-label'); if (bar) bar.textContent = `Zona attiva: ${WS.geoCenter.label} (raggio ${raggio} km)`;
+          nextContact();
         });
       }
       map.fitBounds(bounds, { padding: [30, 30] });
-      $('#geo-start').onclick = () => {
-        if (!sel) return;
-        WS.geoCenter = { lat: sel.lat, lng: sel.lng, label: sel.comune || 'zona scelta', campaign: WS.selectedCampaign };
-        closeModal();
-        toast(`Zona impostata: ${WS.geoCenter.label} — raggio ${raggio} km`);
-        const bar = $('#ws-geo-label'); if (bar) bar.textContent = `Zona attiva: ${WS.geoCenter.label} (raggio ${raggio} km)`;
-        nextContact();
-      };
     }, 60);
   } catch (e) { toast(e.message, true); }
 }
@@ -1480,8 +1474,9 @@ function updateCallUI() {
 async function skipContact() {
   if (WS.current?.cc_id) await api('/op/skip', { method: 'POST', body: { cc_id: WS.current.cc_id } });
   WS.current = null;
-  $('#ws-contact').innerHTML = '<p class="muted">Contatto saltato. Premi <b>Prossima chiamata</b></p>';
   clearEsito();
+  toast('Contatto saltato: passo al prossimo');
+  nextContact(); // mantiene campagna e zona geo attiva
 }
 
 async function startCall() {
@@ -1604,6 +1599,7 @@ function renderEsitoForm() {
           toast('Esito salvato ✓');
         }
         if (CURRENT_VIEW === 'postazione') viewPostazione();
+        else if (CURRENT_VIEW === 'telefono') viewTelefono();
       } catch (e) { toast(e.message, true); }
     };
   });
@@ -1685,6 +1681,10 @@ async function viewTelefono() {
           <p class="muted" id="ws-esito-hint" style="margin:6px 0 10px">Disponibile dopo la chiamata</p>
           <div id="ws-esito-body"></div>
         </div>
+        <div class="card">
+          <b>\uD83D\uDD58 Cronologia chiamate</b>
+          <div id="dial-history" style="margin-top:8px; max-height:340px; overflow-y:auto"><p class="muted">Caricamento...</p></div>
+        </div>
       </div>
     </div>`;
 
@@ -1700,6 +1700,18 @@ async function viewTelefono() {
   $('#view').querySelectorAll('.dial-key').forEach(b => b.onclick = () => { input.value += b.dataset.k; });
   $('#dial-back').onclick = () => { input.value = input.value.slice(0, -1); };
   $('#dial-clear').onclick = () => { input.value = ''; };
+  const histBox = $('#dial-history');
+  api('/op/calls').then(rows => {
+    histBox.innerHTML = rows.slice(0, 15).map(c => `
+      <div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);font-size:13px">
+        <span class="muted" style="white-space:nowrap">${fmtDT(c.started_at)}</span>
+        <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(((c.contatto_nome || '') + ' ' + (c.contatto_cognome || '')).trim() || c.contatto_telefono || '')}</span>
+        ${tag(c.esito)}
+        <button class="btn" data-redial="${esc(c.contatto_telefono || '')}" title="Richiama">\uD83D\uDCDE</button>
+      </div>`).join('') || '<p class="muted">Nessuna chiamata effettuata</p>';
+    histBox.querySelectorAll('[data-redial]').forEach(b => b.onclick = () => { if (b.dataset.redial) { input.value = b.dataset.redial; window.scrollTo({ top: 0, behavior: 'smooth' }); } });
+  }).catch(() => { histBox.innerHTML = '<p class="muted">Cronologia non disponibile</p>'; });
+
   $('#dial-call').onclick = async () => {
     const tel = input.value.trim();
     if (!tel) return toast('Digita un numero', true);

@@ -73,14 +73,14 @@ router.post('/next', (req, res) => {
         WHERE cc.campaign_id = @cid AND cc.stato = 'da_chiamare' ${cond.replace('?', '@uid')}
           AND ct.esito != 'blacklist'
           AND ct.lat IS NOT NULL AND dist_km(@lat, @lng, ct.lat, ct.lng) <= @raggio
-        ORDER BY dist, cc.tentativi LIMIT 1`)
+        ORDER BY (cc.saltato_at IS NOT NULL), dist, cc.tentativi LIMIT 1`)
         .get({ lat, lng, cid: campaignId, uid: req.user.id, raggio: camp.raggio_km || 25 });
     } else {
       row = db.prepare(`
         SELECT cc.id AS cc_id, cc.tentativi, ct.*
         FROM campaign_contacts cc JOIN contacts ct ON ct.id = cc.contact_id
         WHERE cc.campaign_id = ? AND cc.stato = 'da_chiamare' AND ct.esito != 'blacklist' ${cond}
-        ORDER BY cc.tentativi, cc.id LIMIT 1`).get(campaignId, req.user.id);
+        ORDER BY (cc.saltato_at IS NOT NULL), cc.tentativi, cc.id LIMIT 1`).get(campaignId, req.user.id);
     }
     if (!row) return null;
     db.prepare("UPDATE campaign_contacts SET stato='in_chiamata', locked_by=?, locked_at=datetime('now') WHERE id=?").run(uid, row.cc_id);
@@ -116,7 +116,7 @@ router.get('/campaigns/:id/geo-points', (req, res) => {
 /* Salta il contatto corrente (lo rimette in coda) */
 router.post('/skip', (req, res) => {
   const { cc_id } = req.body;
-  if (cc_id) db.prepare("UPDATE campaign_contacts SET stato='da_chiamare', locked_by=NULL, locked_at=NULL WHERE id=? AND locked_by=?").run(cc_id, req.user.id);
+  if (cc_id) db.prepare("UPDATE campaign_contacts SET stato='da_chiamare', locked_by=NULL, locked_at=NULL, saltato_at=datetime('now') WHERE id=? AND locked_by=?").run(cc_id, req.user.id);
   res.json({ ok: true });
 });
 
